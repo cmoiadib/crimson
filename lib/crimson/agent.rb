@@ -6,7 +6,7 @@ module Crimson
     MAX_ITERATIONS = 50
     HISTORY_FILE = ".crimson_history"
 
-    attr_reader :tool_registry, :token_usage, :events, :steering
+    attr_reader :tool_registry, :token_usage, :events, :steering, :session_id, :session_cwd
 
     def initialize(client:, tool_registry:, system_prompt:)
       @client = client
@@ -19,6 +19,10 @@ module Crimson
       @before_tool_call = nil
       @after_tool_call = nil
       @abort_controller = false
+      @session_manager = nil
+      @session_id = nil
+      @session_cwd = nil
+      @last_entry_id = nil
     end
 
     def on(event_type, &handler)
@@ -33,8 +37,25 @@ module Crimson
       @after_tool_call = block
     end
 
+    def start_session(cwd:, session_manager: SessionManager.new)
+      @session_manager = session_manager
+      @session_id = @session_manager.create(cwd: cwd)
+      @session_cwd = cwd
+      @last_entry_id = nil
+    end
+
+    def resume_session(session_id, cwd:, session_manager: SessionManager.new)
+      @session_manager = session_manager
+      entries = @session_manager.load(session_id, cwd: cwd)
+      @session_id = session_id
+      @session_cwd = cwd
+      @history = entries.map(&:to_message).compact
+      @last_entry_id = entries.last&.id
+    end
+
     def prompt(user_input)
       @history << Message::User.new(user_input)
+      append_to_session(@history.last)
       @events.emit(Agent::Events::MESSAGE_START, message: @history.last)
       @events.emit(Agent::Events::MESSAGE_END, message: @history.last)
       run_loop
@@ -130,6 +151,7 @@ module Crimson
 
         track_usage(usage) if usage
         @history << assistant_message
+        append_to_session(assistant_message)
         all_messages << assistant_message
 
         if assistant_message.tool_call?
@@ -151,6 +173,7 @@ module Crimson
 
           tool_results.each do |tr|
             @history << tr
+            append_to_session(tr)
             all_messages << tr
           end
 
@@ -251,6 +274,21 @@ module Crimson
       when "tool_result"
         Message::ToolResult.new(tool_call_id: data[:tool_call_id], name: data[:name], content: data[:content])
       end
+    end
+
+    def append_to_session(message)
+      return unless @session_manager && @session_id
+
+      entry = SessionEntry.from_message(message, parent_id: @last_entry_id)
+      if message.is_a?(Message::Assistant) && @token_usage[:total] > 0
+        entry.token_usage = {
+          "prompt" => @token_usage[:prompt],
+          "completion" => @token_usage[:completion],
+          "total" => @token_usage[:total]
+        }
+      end
+      @session_manager.append(@session_id, cwd: @session_cwd, entry: entry)
+      @last_entry_id = entry.id
     end
   end
 end
