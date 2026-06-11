@@ -45,7 +45,10 @@ module Crimson
           tools: params[:tools] || []
         )
 
-        stream.each do |chunk|
+        stream.each do |event|
+          chunk = event.chunk
+          next unless chunk
+
           choice = chunk.choices&.first
           next unless choice
 
