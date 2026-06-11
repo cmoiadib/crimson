@@ -57,6 +57,8 @@ module Crimson
 
       handle_session_flags(agent)
 
+      agent.enable_compaction!(client: client)
+
       Crimson::Repl.new(agent).start
     end
 

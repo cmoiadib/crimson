@@ -137,6 +137,7 @@ module Crimson
         puts "  /sessions List sessions for current directory"
         puts "  /fork     Fork current session into new branch"
         puts "  /tree     Show conversation tree"
+        puts "  /compact  Compact conversation history"
         puts "  /exit     Exit crimson"
       when "/clear"
         @agent.reset
@@ -207,6 +208,13 @@ module Crimson
             content_preview = e.content.to_s.length > 40 ? "#{e.content.to_s[0..37]}..." : e.content.to_s
             puts "  #{@pastel.dim("  → #{e.tool_name}: #{content_preview}")}"
           end
+        end
+      when "/compact"
+        if @agent.compactor
+          result = @agent.compact!
+          puts @pastel.dim(result)
+        else
+          puts @pastel.yellow("Compaction not enabled.")
         end
       else
         puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
