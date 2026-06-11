@@ -18,7 +18,8 @@ module Crimson
       @cached_tools = nil
     end
 
-    def run(user_input)
+    def run(user_input, tui = nil)
+      @tui = tui
       @history << Message::User.new(user_input)
 
       iterations = 0
@@ -26,7 +27,7 @@ module Crimson
       loop do
         iterations += 1
         if iterations > MAX_ITERATIONS
-          puts @pastel.yellow("\nMax iterations (#{MAX_ITERATIONS}) reached. Stopping.")
+          render_error("Max iterations (#{MAX_ITERATIONS}) reached. Stopping.")
           break
         end
 
@@ -34,58 +35,30 @@ module Crimson
         tools = provider_tool_definitions
 
         streamed_content = false
-        thinking = true
-        spinner_thread = Thread.new do
-          frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-          i = 0
-          while thinking
-            $stdout.write("\r  \e[36m#{frames[i % frames.length]}\e[0m Thinking...")
-            $stdout.flush
-            i += 1
-            sleep 0.08
-          end
-          $stdout.write("\r\e[2K")
-          $stdout.flush
-        end
+        current_text = ""
 
         response, usage = @client.chat(messages: messages, tools: tools) do |text_chunk, tool_event|
-          if thinking
-            thinking = false
-            spinner_thread.join(2)
-            $stdout.write("\r\e[2K")
-            $stdout.flush
-          end
-
           if text_chunk
-            $stdout.print(Crimson::Formatter.format(text_chunk))
-            $stdout.flush
+            current_text << text_chunk
+            render_streaming(text_chunk)
             streamed_content = true
           elsif tool_event
-            print_tool_call(tool_event)
+            render_tool_call_from_event(tool_event)
           end
-        end
-
-        if thinking
-          thinking = false
-          spinner_thread.join(2)
-          $stdout.write("\r\e[2K")
-          $stdout.flush
         end
 
         track_usage(usage) if usage
         @history << response
 
-        # Print content if it wasn't streamed (e.g., error messages)
+        # Render content if it wasn't streamed (e.g., error messages)
         if response.content && !response.content.empty? && !streamed_content
-          formatted = Crimson::Formatter.format(response.content)
-          puts formatted
+          render_agent_text(response.content)
         end
 
         if response.tool_call?
           execute_tool_calls(response)
         else
-          print_usage(usage)
-          puts "\n"
+          render_usage(usage)
           break
         end
       end
@@ -139,7 +112,7 @@ module Crimson
     def execute_tool_calls(response)
       response.tool_calls.each do |tc|
         result = @tool_registry.execute(tc.name, tc.arguments)
-        print_tool_result(tc.name, result)
+        render_tool_result(tc.name, result)
         @history << Message::ToolResult.new(
           tool_call_id: tc.id,
           name: tc.name,
@@ -155,22 +128,71 @@ module Crimson
       @token_usage[:total] += (usage[:total_tokens] || usage["total_tokens"] || 0)
     end
 
-    def print_usage(usage)
+    def render_streaming(text)
+      if @tui
+        @tui.render_streaming(text)
+      else
+        $stdout.print(text)
+        $stdout.flush
+      end
+    end
+
+    def render_agent_text(text)
+      if @tui
+        @tui.render_agent_text(text)
+      else
+        puts text
+      end
+    end
+
+    def render_tool_call_from_event(tool_event)
+      name = tool_event[:name]
+      args = tool_event[:arguments]
+      path = extract_path(args)
+
+      if @tui
+        @tui.render_tool_call(name, path)
+      else
+        print_tool_call_fallback(name, path)
+      end
+    end
+
+    def render_tool_result(name, result)
+      if @tui
+        if result.include?("--- ") && result.include?("+++ ")
+          @tui.render_tool_result(result)
+        else
+          truncated = truncate(result, 200)
+          @tui.render_tool_result(truncated)
+        end
+      else
+        print_tool_result_fallback(name, result)
+      end
+    end
+
+    def render_usage(usage)
       return unless usage
 
       prompt = usage[:prompt_tokens] || usage["prompt_tokens"] || 0
       completion = usage[:completion_tokens] || usage["completion_tokens"] || 0
+      total = prompt + completion
 
-      puts @pastel.dim("\n  tokens: #{prompt} prompt + #{completion} completion = #{prompt + completion} total")
+      if @tui
+        @tui.render_usage(prompt, completion, total)
+      else
+        puts @pastel.dim("\n  tokens: #{prompt} prompt + #{completion} completion = #{total} total")
+      end
     end
 
-    def print_tool_call(tool_event)
-      name = tool_event[:name]
-      args = tool_event[:arguments]
+    def render_error(message)
+      if @tui
+        @tui.render_error(message)
+      else
+        puts @pastel.red(message)
+      end
+    end
 
-      path = extract_path(args)
-
-      # Green for write operations, red for read operations
+    def print_tool_call_fallback(name, path)
       write_tools = ["write_file", "edit_file", "run_command"]
       is_write = write_tools.include?(name)
 
@@ -189,8 +211,7 @@ module Crimson
       end
     end
 
-    def print_tool_result(tool_name, result)
-      # Check if result contains a diff (has --- and +++ lines)
+    def print_tool_result_fallback(name, result)
       if result.include?("--- ") && result.include?("+++ ")
         puts result
       else

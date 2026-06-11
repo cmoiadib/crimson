@@ -6,15 +6,15 @@ module Crimson
     def initialize(agent)
       @agent = agent
       @pastel = Pastel.new
+      @tui = TUI.new
     end
 
     def start
-      print_banner
+      setup_tui
+      setup_reline
 
       loop do
-        input = Reline.readmultiline("crimson> ", false) do |multiline_input|
-          true
-        end
+        input = read_input
 
         break if input.nil?
         input = input.strip
@@ -24,62 +24,84 @@ module Crimson
         if input.start_with?("/")
           handle_command(input)
         else
+          @tui.render_user_input(input)
           begin
-            @agent.run(input)
+            @agent.run(input, @tui)
           rescue => e
-            puts @pastel.red("Error: #{e.message}")
+            @tui.render_error("Error: #{e.message}")
           end
         end
       end
 
-      puts @pastel.dim("Goodbye!")
+      @tui.cleanup
     end
 
     private
 
-    def print_banner
-      puts @pastel.bold("Crimson v#{VERSION}")
-      puts @pastel.dim("Type /help for commands, /exit to quit")
-      puts
+    def setup_tui
+      @tui.setup
+    end
+
+    def setup_reline
+      Reline.completion_proc = proc { |text|
+        if text.start_with?("/")
+          @tui.show_command_palette(text)
+          TUI::COMMANDS.keys.select { |cmd| cmd.start_with?(text) }
+        else
+          @tui.hide_command_palette
+          []
+        end
+      }
+
+      Reline.completion_append_character = ""
+
+      # Handle special keys
+      Reline.pre_input_hook = proc {
+        @tui.render_input_prompt
+      }
+    end
+
+    def read_input
+      @tui.render_input_prompt
+      input = Reline.readline("", false)
+      @tui.hide_command_palette
+      input
     end
 
     def handle_command(input)
       case input
       when "/help"
-        puts <<~HELP
-          Commands:
-            /help    - Show this help message
-            /exit    - Exit crimson
-            /quit    - Exit crimson
-            /clear   - Clear conversation history
-            /model   - Show current model
-            /tools   - List available tools
-            /save    - Save conversation to file
-            /load    - Load conversation from file
-            /usage   - Show total token usage
-        HELP
+        @tui.render_message(@pastel.bold("Commands:"))
+        TUI::COMMANDS.each do |cmd, desc|
+          @tui.render_message("  #{@pastel.bold(cmd.ljust(10))} #{desc}")
+        end
       when "/clear"
         @agent.reset
-        puts @pastel.dim("Conversation cleared.")
+        @tui.clear_output_buffer
+        @tui.render_message(@pastel.dim("Conversation cleared."))
       when "/model"
         config = Crimson.config
-        puts "Provider: #{PROVIDERS[config.provider.to_sym][:name]}"
-        puts "Model: #{config.model}"
+        @tui.render_message("Provider: #{PROVIDERS[config.provider.to_sym][:name]}")
+        @tui.render_message("Model: #{config.model}")
       when "/tools"
-        puts "Available tools:"
-        puts @agent.tool_registry.tool_names.map { |n| "  - #{n}" }.join("\n")
+        @tui.render_message(@pastel.bold("Available tools:"))
+        @agent.tool_registry.tool_names.each do |name|
+          @tui.render_message("  - #{name}")
+        end
       when "/save"
-        puts @agent.save_history
+        result = @agent.save_history
+        @tui.render_message(result)
       when "/load"
-        puts @agent.load_history
+        result = @agent.load_history
+        @tui.render_message(result)
       when "/usage"
         usage = @agent.token_usage
-        puts "Token usage this session:"
-        puts "  Prompt:     #{usage[:prompt]}"
-        puts "  Completion: #{usage[:completion]}"
-        puts "  Total:      #{usage[:total]}"
+        @tui.render_message(@pastel.bold("Token usage this session:"))
+        @tui.render_message("  Prompt:     #{usage[:prompt]}")
+        @tui.render_message("  Completion: #{usage[:completion]}")
+        @tui.render_message("  Total:      #{usage[:total]}")
       else
-        puts @pastel.yellow("Unknown command: #{input}. Type /help for available commands.")
+        @tui.render_error("Unknown command: #{input}. Type /help for available commands.")
       end
     end
   end
