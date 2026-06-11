@@ -62,8 +62,8 @@ module Crimson
     end
 
     def read_input
-      @tui.render_input_prompt
-      input = Reline.readline("", false)
+      # Use Reline's prompt directly instead of TUI rendering it
+      input = Reline.readline("> ", false)
       
       # Show command palette if input starts with /
       if input && input.start_with?("/") && input.length > 1
