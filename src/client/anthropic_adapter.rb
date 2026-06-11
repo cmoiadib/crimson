@@ -37,9 +37,7 @@ module Crimson
         messages.each do |msg|
           case msg
           when Message::System
-            system_parts << msg.to_anthropic_h
-          when Message::Assistant
-            chat_msgs << msg.to_anthropic_h
+            system_parts << msg.content
           when Message::ToolResult
             anthropic_h = msg.to_anthropic_h
             last_msg = chat_msgs.last
@@ -53,14 +51,14 @@ module Crimson
           end
         end
 
-        system_text = system_parts.map { |s| s[:text] }.join("\n\n")
+        system_text = system_parts.join("\n\n")
         system_text = nil if system_text.empty?
 
         [system_text, chat_msgs]
       end
 
-      def stream_chat(params)
-        collected_content = ""
+      def stream_chat(params, &callback)
+        collected_content = String.new
         collected_tool_calls = {}
         current_tool_use = nil
 
@@ -75,31 +73,33 @@ module Crimson
         stream.each do |event|
           case event.type
           when "content_block_delta"
-            if event.delta.is_a?(Hash)
-              if event.delta[:type] == "text_delta"
-                text = event.delta[:text]
-                collected_content << text
-                yield text, nil if block_given?
-              elsif event.delta[:type] == "input_json_delta"
-                if current_tool_use
-                  current_tool_use[:arguments] << event.delta[:partial_json].to_s
-                end
-              end
+            delta = event.delta
+            next unless delta
+
+            delta_type = delta[:type] || delta["type"]
+            if delta_type == "text_delta"
+              text = delta[:text] || delta["text"] || ""
+              collected_content << text
+              callback.call(text, nil)
+            elsif delta_type == "input_json_delta"
+              partial = delta[:partial_json] || delta["partial_json"] || ""
+              current_tool_use[:arguments] << partial if current_tool_use
             end
           when "content_block_start"
-            if event.content_block.is_a?(Hash)
-              cb = event.content_block
-              if cb[:type] == "tool_use"
-                current_tool_use = {
-                  id: cb[:id],
-                  name: cb[:name],
-                  arguments: ""
-                }
-              end
+            content_block = event.content_block
+            next unless content_block
+
+            cb_type = content_block[:type] || content_block["type"]
+            if cb_type == "tool_use"
+              current_tool_use = {
+                id: content_block[:id] || content_block["id"],
+                name: content_block[:name] || content_block["name"],
+                arguments: String.new
+              }
             end
           when "content_block_stop"
             if current_tool_use
-              yield nil, current_tool_use if block_given?
+              callback.call(nil, current_tool_use)
               collected_tool_calls[current_tool_use[:id]] = current_tool_use
               current_tool_use = nil
             end
@@ -120,23 +120,24 @@ module Crimson
           tools: params[:tools]
         )
 
-        content = ""
+        content = String.new
         tool_calls = []
 
-        response.content.each do |block|
-          if block[:type] == "text"
-            content << block[:text]
-          elsif block[:type] == "tool_use"
+        Array(response.content).each do |block|
+          block_type = block[:type] || block["type"]
+          if block_type == "text"
+            content << (block[:text] || block["text"] || "")
+          elsif block_type == "tool_use"
             tool_calls << Message::ToolCall.new(
-              id: block[:id],
-              name: block[:name],
-              arguments: block[:input] || {}
+              id: block[:id] || block["id"],
+              name: block[:name] || block["name"],
+              arguments: block[:input] || block["input"] || {}
             )
           end
         end
 
         Message::Assistant.new(
-          content: content.empty? ? nil : content,
+          content: content.empty? ? nil : content.to_s,
           tool_calls: tool_calls
         )
       rescue => e
@@ -148,7 +149,7 @@ module Crimson
           args = begin
             JSON.parse(raw[:arguments], symbolize_names: false)
           rescue JSON::ParserError
-            raw[:arguments] || {}
+            {}
           end
 
           Message::ToolCall.new(
@@ -159,7 +160,7 @@ module Crimson
         end
 
         Message::Assistant.new(
-          content: content.empty? ? nil : content,
+          content: content.empty? ? nil : content.to_s,
           tool_calls: tc
         )
       end

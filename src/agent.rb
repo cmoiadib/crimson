@@ -22,17 +22,14 @@ module Crimson
       loop do
         iterations += 1
         if iterations > MAX_ITERATIONS
-          puts @pastel.yellow("\nMax iterations reached. Stopping.")
+          puts @pastel.yellow("\nMax iterations (#{MAX_ITERATIONS}) reached. Stopping.")
           break
         end
 
         messages = build_messages
         tools = provider_tool_definitions
 
-        response = @client.chat(
-          messages: messages,
-          tools: tools
-        ) do |text_chunk, tool_event|
+        response = @client.chat(messages: messages, tools: tools) do |text_chunk, tool_event|
           if text_chunk
             print text_chunk
             $stdout.flush
@@ -45,15 +42,7 @@ module Crimson
 
         if response.tool_call?
           puts if response.content && !response.content.empty?
-          response.tool_calls.each do |tc|
-            result = @tool_registry.execute(tc.name, tc.arguments)
-            puts @pastel.dim("  → #{truncate(result, 200)}")
-            @history << Message::ToolResult.new(
-              tool_call_id: tc.id,
-              name: tc.name,
-              content: result
-            )
-          end
+          execute_tool_calls(response)
         else
           puts "\n"
           break
@@ -75,8 +64,7 @@ module Crimson
     end
 
     def provider_tool_definitions
-      provider = Crimson.config.provider.to_sym
-      sdk = PROVIDERS[provider][:sdk]
+      sdk = PROVIDERS[Crimson.config.provider.to_sym][:sdk]
 
       case sdk
       when :openai
@@ -88,28 +76,36 @@ module Crimson
       end
     end
 
+    def execute_tool_calls(response)
+      response.tool_calls.each do |tc|
+        result = @tool_registry.execute(tc.name, tc.arguments)
+        puts @pastel.dim("  -> #{truncate(result, 200)}")
+        @history << Message::ToolResult.new(
+          tool_call_id: tc.id,
+          name: tc.name,
+          content: result
+        )
+      end
+    end
+
     def print_tool_call(tool_event)
       name = tool_event[:name]
       args = tool_event[:arguments]
 
-      display_args = begin
-        parsed = if args.is_a?(String)
-                   JSON.parse(args)
-                 else
-                   args
-                 end
-        short = parsed.map { |k, v| "#{k}: #{truncate(v.to_s, 50)}" }.join(", ")
+      display = begin
+        parsed = args.is_a?(String) ? JSON.parse(args) : args
+        parsed.map { |k, v| "#{k}: #{truncate(v.to_s, 50)}" }.join(", ")
       rescue
         truncate(args.to_s, 80)
       end
 
-      puts @pastel.cyan("▸ #{name}(#{display_args})")
+      puts @pastel.cyan("  #{name}(#{display})")
     end
 
     def truncate(text, max_len)
-      return text if text.nil?
-      text = text.gsub("\n", "\\n")
-      text.length > max_len ? "#{text[0...max_len]}..." : text
+      return "" if text.nil?
+      cleaned = text.gsub("\n", "\\n")
+      cleaned.length > max_len ? "#{cleaned[0...max_len]}..." : cleaned
     end
   end
 end

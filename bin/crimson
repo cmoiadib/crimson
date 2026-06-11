@@ -30,12 +30,9 @@ module Crimson
       client = Crimson::Client.create(config)
 
       registry = Crimson::ToolRegistry.new
-      Crimson::Tools.all.each { |tool| registry.register(tool) }
+      Crimson::Tools::ALL.each { |tool| registry.register(tool) }
 
-      skills_dir = File.join(Dir.pwd, "skills")
-      skills_content = registry.load_skills(skills_dir)
-
-      system_prompt = skills_content.empty? ? File.read(File.join(__dir__, "..", "skills", "coding.md")) : skills_content
+      system_prompt = build_system_prompt
 
       agent = Crimson::Agent.new(
         client: client,
@@ -43,8 +40,16 @@ module Crimson
         system_prompt: system_prompt
       )
 
-      repl = Crimson::Repl.new(agent)
-      repl.start
+      Crimson::Repl.new(agent).start
+    end
+
+    def self.build_system_prompt
+      default_skill = File.read(File.join(__dir__, "..", "skills", "coding.md"))
+      project_skills = registry.load_skills(File.join(Dir.pwd, "skills"))
+
+      parts = [default_skill.strip]
+      parts << project_skills.strip unless project_skills.empty?
+      parts.join("\n\n")
     end
 
     def self.print_help

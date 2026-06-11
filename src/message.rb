@@ -1,3 +1,5 @@
+require 'json'
+
 module Crimson
   module Message
     class Base

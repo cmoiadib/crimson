@@ -30,47 +30,60 @@ module Crimson
         opts = { api_key: @config.api_key }
 
         base_url = @config.base_url || PROVIDERS[@config.provider.to_sym][:base_url]
-        if base_url
-          opts[:base_url] = base_url.sub(/\/v1\/?$/, '')
-        end
+        opts[:base_url] = base_url if base_url
 
         OpenAI::Client.new(**opts)
       end
 
-      def stream_chat(params)
-        collected_content = ""
+      def stream_chat(params, &callback)
+        collected_content = String.new
         collected_tool_calls = {}
-        current_tool_calls = {}
 
-        stream = @client.responses.stream(
-          input: params[:messages],
-          model: params[:model],
-          tools: params[:tools]
-        )
+        stream_callback = proc do |chunk|
+          delta = chunk.dig("choices", 0, "delta")
+          next unless delta
 
-        stream.each do |event|
-          case event.type
-          when "response.output_text.delta"
-            text = event.delta
+          if delta["content"]
+            text = delta["content"]
             collected_content << text
-            yield text, nil if block_given?
-          when "response.function_call_arguments.delta"
-            args_delta = event.delta
-            call_id = event.item_id
-            current_tool_calls[call_id] ||= { id: call_id, name: "", arguments: "" }
-            current_tool_calls[call_id][:arguments] << args_delta
-          when "response.function_call_arguments.done"
-            call_id = event.item_id
-            if current_tool_calls[call_id]
-              yield nil, current_tool_calls[call_id] if block_given?
-              collected_tool_calls[call_id] = current_tool_calls[call_id]
+            callback.call(text, nil)
+          end
+
+          if delta["tool_calls"]
+            delta["tool_calls"].each do |tc|
+              id = tc.dig("id")
+              idx = tc["index"]
+
+              if id
+                collected_tool_calls[idx] ||= {
+                  id: id,
+                  name: tc.dig("function", "name") || "",
+                  arguments: String.new
+                }
+              end
+
+              if tc.dig("function", "arguments")
+                collected_tool_calls[idx][:arguments] << tc["function"]["arguments"]
+                collected_tool_calls[idx][:name] = tc.dig("function", "name") if tc.dig("function", "name")
+              end
             end
           end
         end
 
+        @client.chat.completions.create(
+          messages: params[:messages],
+          model: params[:model],
+          tools: params[:tools],
+          stream: stream_callback
+        )
+
+        collected_tool_calls.each do |_idx, tc|
+          callback.call(nil, tc)
+        end
+
         build_assistant_message(collected_content, collected_tool_calls.values)
       rescue => e
-        Message::Assistant.new(content: "Error communicating with OpenAI: #{e.message}")
+        Message::Assistant.new(content: "Error communicating with #{provider_name}: #{e.message}")
       end
 
       def non_stream_chat(params)
@@ -80,7 +93,7 @@ module Crimson
           tools: params[:tools]
         )
 
-        choice = response.choices.first
+        choice = response.choices&.first
         return Message::Assistant.new(content: "") unless choice
 
         msg = choice.message
@@ -91,7 +104,7 @@ module Crimson
           tool_calls: tool_calls || []
         )
       rescue => e
-        Message::Assistant.new(content: "Error communicating with OpenAI: #{e.message}")
+        Message::Assistant.new(content: "Error communicating with #{provider_name}: #{e.message}")
       end
 
       def parse_tool_calls(raw_tool_calls)
@@ -126,9 +139,13 @@ module Crimson
         end
 
         Message::Assistant.new(
-          content: content.empty? ? nil : content,
+          content: content.empty? ? nil : content.to_s,
           tool_calls: tc
         )
+      end
+
+      def provider_name
+        PROVIDERS[@config.provider.to_sym][:name]
       end
     end
   end
