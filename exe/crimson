@@ -5,12 +5,27 @@ require "crimson"
 module Crimson
   module CLI
     def self.run(args)
+      flags = %w[--continue -c --resume --session --no-session --help -h]
+      has_flags = args.any? { |a| flags.include?(a) || a == "setup" }
+
+      if has_flags
+        command = args.first
+        case command
+        when "setup"
+          Crimson::Setup.run
+          return
+        when "--help", "-h"
+          print_help
+          return
+        end
+        start_repl
+        return
+      end
+
       command = args.first
 
       case command
-      when "setup"
-        Crimson::Setup.run
-      when "help", "--help", "-h"
+      when "help"
         print_help
       when nil
         start_repl
@@ -40,7 +55,53 @@ module Crimson
         system_prompt: system_prompt
       )
 
+      handle_session_flags(agent)
+
       Crimson::Repl.new(agent).start
+    end
+
+    def self.handle_session_flags(agent)
+      args = ARGV.dup
+      session_manager = Crimson::SessionManager.new
+      pastel = Pastel.new
+
+      if args.include?("--no-session")
+        return
+      elsif args.include?("--continue") || args.include?("-c")
+        latest = session_manager.latest(cwd: Dir.pwd)
+        if latest
+          agent.resume_session(latest.id, cwd: Dir.pwd, session_manager: session_manager)
+          puts pastel.dim("Resumed session: #{latest.id[0..7]} (#{latest.preview})")
+        else
+          agent.start_session(cwd: Dir.pwd, session_manager: session_manager)
+        end
+      elsif args.include?("--resume")
+        sessions = session_manager.list(cwd: Dir.pwd)
+        if sessions.empty?
+          puts pastel.dim("No sessions found. Starting new session.")
+          agent.start_session(cwd: Dir.pwd, session_manager: session_manager)
+        else
+          prompt = TTY::Prompt.new
+          choices = sessions.map { |s| { name: "#{s.preview || "(no preview)"} (#{s.last_timestamp})", value: s.id } }
+          selected = prompt.select("Resume session:", choices)
+          agent.resume_session(selected, cwd: Dir.pwd, session_manager: session_manager)
+        end
+      elsif idx = args.index("--session")
+        session_id = args[idx + 1]
+        if session_id
+          begin
+            agent.resume_session(session_id, cwd: Dir.pwd, session_manager: session_manager)
+          rescue => e
+            puts pastel.red("Failed to resume session: #{e.message}")
+            exit 1
+          end
+        else
+          puts pastel.red("--session requires a session ID")
+          exit 1
+        end
+      else
+        agent.start_session(cwd: Dir.pwd, session_manager: session_manager)
+      end
     end
 
     def self.run_one_shot(task)
@@ -164,11 +225,17 @@ module Crimson
 
     def self.print_help
       puts <<~HELP
-        Usage: crimson [command] [task]
+        Usage: crimson [command] [options] [task]
 
         Commands:
           setup              Configure your provider and API key
           help               Show this help message
+
+        Session Options:
+          -c, --continue     Resume latest session
+          --resume           Browse sessions to resume
+          --session ID       Resume specific session
+          --no-session       Don't save session
 
         Running without a command starts the interactive REPL.
         Passing a task string runs it in one-shot mode:
