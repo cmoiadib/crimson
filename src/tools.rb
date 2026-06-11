@@ -205,8 +205,82 @@ module Crimson
         output
       rescue => e
         "Error executing command: #{e.message}"
+      end
+    end
+
+    module EditFile
+      TOOL_NAME = "edit_file"
+
+      def self.definition
+        {
+          type: "function",
+          function: {
+            name: TOOL_NAME,
+            description: "Replace a specific string in a file. The old_string must appear exactly once in the file unless replace_all is true.",
+            parameters: {
+              type: "object",
+              properties: {
+                path: { type: "string", description: "The path to the file to edit" },
+                old_string: { type: "string", description: "The exact string to find and replace" },
+                new_string: { type: "string", description: "The string to replace it with" },
+                replace_all: { type: "boolean", description: "Replace all occurrences (default: false)" }
+              },
+              required: ["path", "old_string", "new_string"]
+            }
+          }
+        }
+      end
+
+      def self.anthropic_definition
+        {
+          name: TOOL_NAME,
+          description: "Replace a specific string in a file. The old_string must appear exactly once in the file unless replace_all is true.",
+          input_schema: {
+            type: "object",
+            properties: {
+              path: { type: "string", description: "The path to the file to edit" },
+              old_string: { type: "string", description: "The exact string to find and replace" },
+              new_string: { type: "string", description: "The string to replace it with" },
+              replace_all: { type: "boolean", description: "Replace all occurrences (default: false)" }
+            },
+            required: ["path", "old_string", "new_string"]
+          }
+        }
+      end
+
+      def self.call(path:, old_string:, new_string:, replace_all: false)
+        return "Error: No path provided" if path.nil? || path.strip.empty?
+        return "Error: No old_string provided" if old_string.nil? || old_string.empty?
+
+        expanded = File.expand_path(path)
+
+        return "Error: File not found: #{path}" unless File.exist?(expanded)
+        return "Error: Not a file: #{path}" unless File.file?(expanded)
+
+        content = File.read(expanded)
+
+        if replace_all
+          count = content.scan(old_string).length
+          return "No occurrences of old_string found in #{path}" if count == 0
+
+          new_content = content.gsub(old_string, new_string)
+          File.write(expanded, new_content)
+          "Successfully replaced #{count} occurrence(s) in #{path}"
+        else
+          count = content.scan(old_string).length
+
+          if count == 0
+            "Error: old_string not found in #{path}. Make sure it matches exactly."
+          elsif count > 1
+            "Error: old_string found #{count} times in #{path}. It must be unique, or use replace_all: true."
+          else
+            new_content = content.sub(old_string, new_string)
+            File.write(expanded, new_content)
+            "Successfully edited #{path}"
+          end
+        end
       rescue => e
-        "Error executing command: #{e.message}"
+        "Error editing file: #{e.message}"
       end
     end
 
@@ -272,6 +346,6 @@ module Crimson
       end
     end
 
-    ALL = [ReadFile, WriteFile, ListDirectory, RunCommand, SearchFiles].freeze
+    ALL = [ReadFile, WriteFile, EditFile, ListDirectory, RunCommand, SearchFiles].freeze
   end
 end
