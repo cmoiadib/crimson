@@ -9,12 +9,12 @@ module Crimson
     end
 
     def start
-      print_banner
+      puts @pastel.bold("Crimson v#{VERSION}")
+      puts @pastel.dim("Type /help for commands, /exit to quit")
+      puts
 
       loop do
-        input = Reline.readmultiline("crimson> ", false) do |multiline_input|
-          true
-        end
+        input = Reline.readline("> ", true)
 
         break if input.nil?
         input = input.strip
@@ -37,27 +37,18 @@ module Crimson
 
     private
 
-    def print_banner
-      puts @pastel.bold("Crimson v#{VERSION}")
-      puts @pastel.dim("Type /help for commands, /exit to quit")
-      puts
-    end
-
     def handle_command(input)
       case input
       when "/help"
-        puts <<~HELP
-          Commands:
-            /help    - Show this help message
-            /exit    - Exit crimson
-            /quit    - Exit crimson
-            /clear   - Clear conversation history
-            /model   - Show current model
-            /tools   - List available tools
-            /save    - Save conversation to file
-            /load    - Load conversation from file
-            /usage   - Show total token usage
-        HELP
+        puts @pastel.bold("Commands:")
+        puts "  /help    Show help message"
+        puts "  /clear   Clear conversation history"
+        puts "  /model   Show current model"
+        puts "  /tools   List available tools"
+        puts "  /save    Save conversation to file"
+        puts "  /load    Load conversation from file"
+        puts "  /usage   Show token usage"
+        puts "  /exit    Exit crimson"
       when "/clear"
         @agent.reset
         puts @pastel.dim("Conversation cleared.")
@@ -66,20 +57,22 @@ module Crimson
         puts "Provider: #{PROVIDERS[config.provider.to_sym][:name]}"
         puts "Model: #{config.model}"
       when "/tools"
-        puts "Available tools:"
-        puts @agent.tool_registry.tool_names.map { |n| "  - #{n}" }.join("\n")
+        puts @pastel.bold("Available tools:")
+        @agent.tool_registry.tool_names.each do |name|
+          puts "  - #{name}"
+        end
       when "/save"
         puts @agent.save_history
       when "/load"
         puts @agent.load_history
       when "/usage"
         usage = @agent.token_usage
-        puts "Token usage this session:"
+        puts @pastel.bold("Token usage:")
         puts "  Prompt:     #{usage[:prompt]}"
         puts "  Completion: #{usage[:completion]}"
         puts "  Total:      #{usage[:total]}"
       else
-        puts @pastel.yellow("Unknown command: #{input}. Type /help for available commands.")
+        puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
       end
     end
   end

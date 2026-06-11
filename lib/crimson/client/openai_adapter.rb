@@ -60,10 +60,17 @@ module Crimson
             collected_tool_calls[idx] ||= {
               id: nil,
               name: event.name || "",
-              arguments: String.new
+              arguments: String.new,
+              _emitted: false
             }
             collected_tool_calls[idx][:name] = event.name if event.name
             collected_tool_calls[idx][:arguments] << event.arguments_delta if event.arguments_delta
+
+            # Emit tool call as soon as we have the name
+            if event.name && !collected_tool_calls[idx][:_emitted]
+              collected_tool_calls[idx][:_emitted] = true
+              callback.call(nil, collected_tool_calls[idx])
+            end
 
           when OpenAI::Helpers::Streaming::ChatFunctionToolCallArgumentsDoneEvent
             idx = event.index

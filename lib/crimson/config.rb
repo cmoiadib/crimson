@@ -4,7 +4,7 @@ module Crimson
   class Config
     attr_reader :provider, :model, :api_key, :base_url, :max_tokens
 
-    def initialize(provider: nil, model: nil, api_key: nil, base_url: nil, max_tokens: 1000)
+    def initialize(provider: nil, model: nil, api_key: nil, base_url: nil, max_tokens: 8192)
       @provider = provider
       @model = model
       @api_key = api_key
