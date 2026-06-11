@@ -9,10 +9,13 @@ module Crimson
       @spinner_active = false
       @first_token_received = false
       setup_event_handlers
+      setup_readline
     end
 
     def start
       $stdout.sync = true
+      Reline.autocompletion = true
+      Reline.completion_case_fold = true
       puts @pastel.bold("Crimson v#{VERSION}")
       puts @pastel.dim("Type /help for commands, /exit to quit")
       puts
@@ -232,6 +235,35 @@ module Crimson
       return "" if text.nil?
       cleaned = text.gsub("\n", "\\n")
       cleaned.length > max_len ? "#{cleaned[0...max_len]}..." : cleaned
+    end
+
+    def setup_readline
+      Reline.completion_proc = method(:file_path_completion)
+    end
+
+    def file_path_completion(input)
+      prefix = input.strip
+      return [] unless prefix.start_with?("@", "./", "~/", "/")
+
+      path_prefix = prefix.start_with?("@") ? prefix[1..] : prefix
+      expanded = File.expand_path(path_prefix)
+
+      if File.directory?(expanded)
+        Dir.entries(expanded)
+          .reject { |e| e.start_with?(".") }
+          .map { |e| prefix.end_with?("/") ? "#{prefix}#{e}" : "#{prefix}/#{e}" }
+      else
+        dir = File.dirname(expanded)
+        base = File.basename(expanded)
+        return [] unless Dir.exist?(dir)
+
+        Dir.entries(dir)
+          .reject { |e| e.start_with?(".") }
+          .select { |e| e.downcase.start_with?(base.downcase) }
+          .map { |e| prefix.include?("/") ? "#{File.dirname(prefix)}/#{e}" : e }
+      end
+    rescue => e
+      []
     end
   end
 end
