@@ -1,4 +1,5 @@
 require "spec_helper"
+require "tmpdir"
 
 RSpec.describe Crimson::Agent do
   let(:mock_client) { MockClient.new }
@@ -324,6 +325,86 @@ RSpec.describe Crimson::Agent do
       expect(new_agent.history.size).to eq(2)
 
       File.delete(Crimson::Agent::HISTORY_FILE) if File.exist?(Crimson::Agent::HISTORY_FILE)
+    end
+  end
+
+  describe "session integration" do
+    let(:tmp_dir) { Dir.mktmpdir("crimson_session_test") }
+    let(:session_manager) { Crimson::SessionManager.new(sessions_dir: tmp_dir) }
+
+    after { FileUtils.rm_rf(tmp_dir) }
+
+    it "appends entries to session on prompt" do
+      agent.start_session(cwd: "/test", session_manager: session_manager)
+
+      mock_client.responses = [
+        { message: Crimson::Message::Assistant.new(content: "Hello!"), usage: nil }
+      ]
+
+      agent.prompt("Hi")
+
+      entries = session_manager.load(agent.session_id, cwd: "/test")
+      expect(entries.length).to eq(2)
+      expect(entries[0].role).to eq("user")
+      expect(entries[0].content).to eq("Hi")
+      expect(entries[1].role).to eq("assistant")
+      expect(entries[1].content).to eq("Hello!")
+    end
+
+    it "appends tool call and result entries" do
+      agent.start_session(cwd: "/test", session_manager: session_manager)
+
+      tool_call = Crimson::Message::ToolCall.new(
+        id: "tc-1", name: "echo", arguments: { "text" => "world" }
+      )
+
+      mock_client.responses = [
+        { message: Crimson::Message::Assistant.new(content: nil, tool_calls: [tool_call]), usage: nil },
+        { message: Crimson::Message::Assistant.new(content: "Done!"), usage: nil }
+      ]
+
+      agent.prompt("echo world")
+
+      entries = session_manager.load(agent.session_id, cwd: "/test")
+      expect(entries.length).to eq(4)
+      expect(entries[0].role).to eq("user")
+      expect(entries[1].role).to eq("assistant")
+      expect(entries[1].tool_calls.length).to eq(1)
+      expect(entries[2].role).to eq("tool_result")
+      expect(entries[2].tool_call_id).to eq("tc-1")
+      expect(entries[3].role).to eq("assistant")
+      expect(entries[3].content).to eq("Done!")
+    end
+
+    it "resumes a session by loading history" do
+      agent.start_session(cwd: "/test", session_manager: session_manager)
+
+      mock_client.responses = [
+        { message: Crimson::Message::Assistant.new(content: "Hello!"), usage: nil }
+      ]
+
+      agent.prompt("Hi")
+      session_id = agent.session_id
+
+      new_agent = described_class.new(
+        client: mock_client,
+        tool_registry: registry,
+        system_prompt: system_prompt
+      )
+      new_agent.resume_session(session_id, cwd: "/test", session_manager: session_manager)
+
+      expect(new_agent.history.length).to eq(2)
+      expect(new_agent.history.first.content).to eq("Hi")
+    end
+
+    it "does not track session when not started" do
+      mock_client.responses = [
+        { message: Crimson::Message::Assistant.new(content: "Hello!"), usage: nil }
+      ]
+
+      agent.prompt("Hi")
+
+      expect(agent.session_id).to be_nil
     end
   end
 end
