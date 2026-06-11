@@ -5,3 +5,5 @@
 .bundle/
 vendor/
 pkg/
+docs/
+spec/
