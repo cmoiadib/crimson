@@ -29,6 +29,7 @@ module Crimson
       @cost_tracker = CostTracker.new
       @cached_tool_defs = nil
       @executor = nil
+      @cached_system_msg = nil
     end
 
     def on(event_type, &handler)
@@ -249,7 +250,7 @@ module Crimson
 
     def build_messages
       msgs = []
-      msgs << Message::System.new(@system_prompt) unless @system_prompt.empty?
+      msgs << @cached_system_msg ||= Message::System.new(@system_prompt) unless @system_prompt.empty?
       msgs.concat(@history)
       msgs
     end
