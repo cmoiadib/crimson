@@ -7,13 +7,15 @@ module Crimson
     HISTORY_FILE = ".crimson_history"
 
     attr_reader :tool_registry, :token_usage, :events, :steering, :session_id, :session_cwd, :cost_tracker, :compactor
+  attr_writer :define_system_prompt
 
-    def initialize(client:, tool_registry:, system_prompt:)
-      @client = client
-      @tool_registry = tool_registry
-      @system_prompt = system_prompt
-      @history = []
-      @events = Agent::EventEmitter.new
+  def initialize(client:, tool_registry:, system_prompt:)
+    @client = client
+    @tool_registry = tool_registry
+    @system_prompt = system_prompt
+    @system_prompt_builder = nil
+    @history = []
+    @events = Agent::EventEmitter.new
       @steering = Agent::SteeringManager.new
       @token_usage = { prompt: 0, completion: 0, total: 0 }
       @before_tool_call = nil
@@ -23,8 +25,13 @@ module Crimson
       @session_id = nil
       @session_cwd = nil
       @last_entry_id = nil
+      @session_buffer = []
+      @session_flush_thread = nil
       @compactor = nil
       @cost_tracker = CostTracker.new
+      @cached_tool_defs = nil
+      @executor = nil
+      @cached_system_msg = nil
     end
 
     def on(event_type, &handler)
@@ -59,13 +66,14 @@ module Crimson
       @compactor = Compactor.new(client: client, max_context_tokens: max_context_tokens)
     end
 
-    def compact!
-      return "Compaction not enabled" unless @compactor
-      return "History too short to compact" if @history.length <= 5
+  def compact!
+    return "Compaction not enabled" unless @compactor
+    return "History too short to compact" if @history.length <= 5
 
-      @history = @compactor.compact(@history, system_prompt: @system_prompt)
-      "Compacted history to #{@history.length} messages"
-    end
+    resolved_prompt = @system_prompt || (@system_prompt_builder&.call if @system_prompt_builder) || ""
+    @history = @compactor.compact(@history, system_prompt: resolved_prompt)
+    "Compacted history to #{@history.length} messages"
+  end
 
     def prompt(user_input)
       @history << Message::User.new(user_input)
@@ -149,13 +157,13 @@ module Crimson
 
         @events.emit(Agent::Events::TURN_START)
 
-        messages = build_messages
-
-        if @compactor && @compactor.needs_compaction?(@history)
-          @history = @compactor.compact(@history, system_prompt: @system_prompt)
+        if @compactor && @history.length > 10 && @compactor.needs_compaction?(@history)
+          resolved = @system_prompt || (@system_prompt_builder&.call if @system_prompt_builder) || ""
+          @history = @compactor.compact(@history, system_prompt: resolved)
         end
 
-        tools = provider_tool_definitions
+        messages = build_messages
+        tools = tools_for_message(@history.last&.content.to_s)
 
         assistant_message, usage = @client.chat(messages: messages, tools: tools) do |text_chunk, tool_event|
           if text_chunk
@@ -241,15 +249,17 @@ module Crimson
         end
       end
 
+      flush_session_buffer
       @events.emit(Agent::Events::AGENT_END, messages: all_messages)
     end
 
-    def build_messages
-      msgs = []
-      msgs << Message::System.new(@system_prompt) unless @system_prompt.empty?
-      msgs.concat(@history)
-      msgs
-    end
+  def build_messages
+    msgs = []
+    resolved_prompt = @system_prompt || (@system_prompt_builder&.call if @system_prompt_builder) || ""
+    msgs << @cached_system_msg ||= Message::System.new(resolved_prompt) unless resolved_prompt.empty?
+    msgs.concat(@history)
+    msgs
+  end
 
     def provider_tool_definitions
       sdk = PROVIDERS[Crimson.config.provider.to_sym][:sdk]
@@ -308,8 +318,48 @@ module Crimson
           "total" => @token_usage[:total]
         }
       end
-      @session_manager.append(@session_id, cwd: @session_cwd, entry: entry)
       @last_entry_id = entry.id
+      @session_buffer << entry
+
+      flush_session_buffer if @session_buffer.length >= 3
+    end
+
+    def flush_session_buffer
+      return if @session_buffer.empty?
+      return unless @session_manager && @session_id
+
+      entries = @session_buffer.dup
+      @session_buffer.clear
+      entries.each { |e| @session_manager.append(@session_id, cwd: @session_cwd, entry: e) }
+    end
+
+    def cached_tool_definitions
+      @cached_tool_defs ||= provider_tool_definitions
+    end
+
+    def tools_for_message(user_input)
+      return cached_tool_definitions if needs_tools?(user_input)
+      []
+    end
+
+    NEEDS_TOOL_PATTERNS = %w[
+      read write edit create fix bug test run exec command search find
+      file files directory folder install update delete remove patch
+      config setup deploy build compile lint format check verify
+      gem npm pip cargo bundle make git docker ls cat touch mkdir rm mv cp
+      grep rg sed awk head tail wc diff code project src spec
+      what's whats list show look open
+    ]
+
+    TRIVIAL_PATTERNS = %w[hi hello hey thanks thank ok yes no bye goodbye sure]
+
+    def needs_tools?(input)
+      return true if @history.any? { |m| m.is_a?(Message::ToolResult) }
+
+      lower = input.downcase.strip
+      return false if TRIVIAL_PATTERNS.include?(lower) || lower.length < 5
+
+      NEEDS_TOOL_PATTERNS.any? { |keyword| lower.include?(keyword) }
     end
   end
 end
