@@ -11,7 +11,11 @@ module Crimson
       end
 
       def chat(messages:, tools: [], &stream_callback)
-        params = build_params(messages, tools)
+        params = {
+          messages: messages.map(&:to_openai_h),
+          model: @config.model
+        }
+        params[:tools] = tools unless tools.empty?
 
         if block_given?
           stream_chat(params, &stream_callback)
@@ -31,123 +35,101 @@ module Crimson
         OpenAI::Client.new(**opts)
       end
 
-      def build_params(messages, tools)
-        params = {
-          input: messages_to_input(messages),
-          model: @config.model
-        }
-        params[:tools] = tools unless tools.empty?
-        params
-      end
-
-      def messages_to_input(messages)
-        messages.map { |msg| message_to_input_h(msg) }
-      end
-
-      def message_to_input_h(msg)
-        case msg
-        when Message::System
-          { role: "system", content: msg.content }
-        when Message::User
-          { role: "user", content: msg.content }
-        when Message::Assistant
-          if msg.tool_call?
-            msg.tool_calls.map do |tc|
-              {
-                type: "function_call",
-                id: tc.id,
-                name: tc.name,
-                arguments: JSON.generate(tc.arguments)
-              }
-            end
-          else
-            { role: "assistant", content: msg.content || "" }
-          end
-        when Message::ToolResult
-          {
-            type: "function_call_output",
-            call_id: msg.tool_call_id,
-            output: msg.content
-          }
-        end
-      end
-
       def stream_chat(params, &callback)
         collected_content = String.new
         collected_tool_calls = {}
 
-        stream = @client.responses.stream(
-          input: params[:input],
+        stream = @client.chat.completions.stream(
+          messages: params[:messages],
           model: params[:model],
           tools: params[:tools] || []
         )
 
-        stream.each do |event|
-          case event.type
-          when "response.output_text.delta"
-            text = event.delta
+        stream.each do |chunk|
+          choice = chunk.choices&.first
+          next unless choice
+
+          delta = choice.delta
+          next unless delta
+
+          if delta.content
+            text = delta.content
             collected_content << text
             callback.call(text, nil)
-          when "response.function_call_arguments.delta"
-            id = event.item_id
-            collected_tool_calls[id] ||= { id: id, name: "", arguments: String.new }
-            collected_tool_calls[id][:arguments] << event.delta
-          when "response.function_call.name.done"
-            id = event.item_id
-            collected_tool_calls[id] ||= { id: id, name: "", arguments: String.new }
-            collected_tool_calls[id][:name] = event.name
+          end
+
+          if delta.tool_calls
+            delta.tool_calls.each do |tc|
+              id = tc.id
+              idx = tc.index
+
+              if id
+                collected_tool_calls[idx] ||= {
+                  id: id,
+                  name: tc.function&.name || "",
+                  arguments: String.new
+                }
+              end
+
+              if tc.function&.arguments
+                collected_tool_calls[idx][:arguments] << tc.function.arguments
+                collected_tool_calls[idx][:name] = tc.function.name if tc.function.name
+              end
+            end
           end
         end
 
-        collected_tool_calls.each do |_id, tc|
+        collected_tool_calls.each do |_idx, tc|
           callback.call(nil, tc)
         end
 
-        [build_assistant_message(collected_content, collected_tool_calls.values), nil]
+        usage = stream.get_final_completion&.usage
+        usage_h = usage ? {
+          prompt_tokens: usage.prompt_tokens || 0,
+          completion_tokens: usage.completion_tokens || 0,
+          total_tokens: usage.total_tokens || 0
+        } : nil
+
+        [build_assistant_message(collected_content, collected_tool_calls.values), usage_h]
       rescue => e
         [Message::Assistant.new(content: "Error communicating with #{provider_name}: #{e.message}"), nil]
       end
 
       def non_stream_chat(params)
-        response = @client.responses.create(
-          input: params[:input],
+        response = @client.chat.completions.create(
+          messages: params[:messages],
           model: params[:model],
           tools: params[:tools] || []
         )
 
-        content = String.new
-        tool_calls = []
+        choice = response.choices&.first
+        return [Message::Assistant.new(content: ""), nil] unless choice
 
-        Array(response.output).each do |block|
-          case block.type
-          when "message"
-            Array(block.content).each do |c|
-              content << c.text if c.respond_to?(:text)
-            end
-          when "function_call"
-            args = begin
-              JSON.parse(block.arguments, symbolize_names: false)
-            rescue JSON::ParserError
-              {}
-            end
-            tool_calls << Message::ToolCall.new(
-              id: block.id || block.call_id,
-              name: block.name,
-              arguments: args
-            )
-          end
-        end
+        msg = choice.message
+        tool_calls = parse_tool_calls(msg.tool_calls) if msg.tool_calls
 
         usage = response.usage
         usage_h = usage ? {
-          prompt_tokens: usage.input_tokens || 0,
-          completion_tokens: usage.output_tokens || 0,
-          total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0)
+          prompt_tokens: usage.prompt_tokens || 0,
+          completion_tokens: usage.completion_tokens || 0,
+          total_tokens: usage.total_tokens || 0
         } : nil
 
-        [Message::Assistant.new(content: content.empty? ? nil : content.to_s, tool_calls: tool_calls), usage_h]
+        [Message::Assistant.new(content: msg.content, tool_calls: tool_calls || []), usage_h]
       rescue => e
         [Message::Assistant.new(content: "Error communicating with #{provider_name}: #{e.message}"), nil]
+      end
+
+      def parse_tool_calls(raw_tool_calls)
+        raw_tool_calls.map do |tc|
+          args = begin
+            JSON.parse(tc.function.arguments, symbolize_names: false)
+          rescue JSON::ParserError
+            {}
+          end
+
+          Message::ToolCall.new(id: tc.id, name: tc.function.name, arguments: args)
+        end
       end
 
       def build_assistant_message(content, tool_calls)
