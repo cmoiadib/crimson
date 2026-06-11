@@ -24,7 +24,6 @@ module Crimson
         if input.start_with?("/")
           handle_command(input)
         else
-          puts @pastel.cyan("⏺ #{input}")
           begin
             @agent.run(input)
           rescue => e

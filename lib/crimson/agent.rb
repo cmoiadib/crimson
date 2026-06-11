@@ -36,7 +36,29 @@ module Crimson
         streamed_content = false
         current_text = ""
 
+        # Thinking animation
+        thinking = true
+        spinner_thread = Thread.new do
+          frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+          i = 0
+          while thinking
+            $stdout.write("\r  \e[36m#{frames[i % frames.length]}\e[0m Thinking...")
+            $stdout.flush
+            i += 1
+            sleep 0.08
+          end
+          $stdout.write("\r\e[2K")
+          $stdout.flush
+        end
+
         response, usage = @client.chat(messages: messages, tools: tools) do |text_chunk, tool_event|
+          if thinking
+            thinking = false
+            spinner_thread.join(2)
+            $stdout.write("\r\e[2K")
+            $stdout.flush
+          end
+
           if text_chunk
             current_text << text_chunk
             render_streaming(text_chunk)
@@ -44,6 +66,13 @@ module Crimson
           elsif tool_event
             render_tool_call_from_event(tool_event)
           end
+        end
+
+        if thinking
+          thinking = false
+          spinner_thread.join(2)
+          $stdout.write("\r\e[2K")
+          $stdout.flush
         end
 
         track_usage(usage) if usage
