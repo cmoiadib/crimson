@@ -15,6 +15,7 @@ module Crimson
       @history = []
       @pastel = Pastel.new
       @token_usage = { prompt: 0, completion: 0, total: 0 }
+      @cached_tools = nil
     end
 
     def run(user_input)
@@ -33,10 +34,18 @@ module Crimson
         tools = provider_tool_definitions
 
         streamed_content = false
+        thinking = true
+        print @pastel.dim("  Thinking...")
 
         response, usage = @client.chat(messages: messages, tools: tools) do |text_chunk, tool_event|
+          if thinking
+            print "\r\e[K"
+            thinking = false
+          end
+
           if text_chunk
-            print text_chunk
+            formatted = Crimson::Formatter.format(text_chunk)
+            print formatted
             $stdout.flush
             streamed_content = true
           elsif tool_event
@@ -44,12 +53,18 @@ module Crimson
           end
         end
 
+        if thinking
+          print "\r\e[K"
+          thinking = false
+        end
+
         track_usage(usage) if usage
         @history << response
 
         # Print content if it wasn't streamed (e.g., error messages)
         if response.content && !response.content.empty? && !streamed_content
-          puts response.content
+          formatted = Crimson::Formatter.format(response.content)
+          puts formatted
         end
 
         if response.tool_call?
@@ -97,22 +112,20 @@ module Crimson
     end
 
     def provider_tool_definitions
-      sdk = PROVIDERS[Crimson.config.provider.to_sym][:sdk]
-
-      case sdk
-      when :openai
-        @tool_registry.openai_definitions
-      when :anthropic
-        @tool_registry.anthropic_definitions
-      else
-        []
+      @cached_tools ||= begin
+        sdk = PROVIDERS[Crimson.config.provider.to_sym][:sdk]
+        case sdk
+        when :openai then @tool_registry.openai_definitions
+        when :anthropic then @tool_registry.anthropic_definitions
+        else []
+        end
       end
     end
 
     def execute_tool_calls(response)
       response.tool_calls.each do |tc|
         result = @tool_registry.execute(tc.name, tc.arguments)
-        puts @pastel.dim("  -> #{truncate(result, 200)}")
+        print_tool_result(tc.name, result)
         @history << Message::ToolResult.new(
           tool_call_id: tc.id,
           name: tc.name,
@@ -141,14 +154,34 @@ module Crimson
       name = tool_event[:name]
       args = tool_event[:arguments]
 
-      display = begin
-        parsed = args.is_a?(String) ? JSON.parse(args) : args
-        parsed.map { |k, v| "#{k}: #{truncate(v.to_s, 50)}" }.join(", ")
-      rescue
-        truncate(args.to_s, 80)
-      end
+      path = extract_path(args)
 
-      puts @pastel.cyan("  #{name}(#{display})")
+      if path
+        puts @pastel.bold.red("  #{name}(#{path})")
+      else
+        puts @pastel.bold.cyan("  #{name}")
+      end
+    end
+
+    def print_tool_result(tool_name, result)
+      # Check if result contains a diff (has --- and +++ lines)
+      if result.include?("--- ") && result.include?("+++ ")
+        puts result
+      else
+        truncated = truncate(result, 200)
+        puts @pastel.dim("  -> #{truncated}")
+      end
+    end
+
+    def extract_path(args)
+      parsed = if args.is_a?(String)
+                 JSON.parse(args) rescue {}
+               else
+                 args
+               end
+      parsed["path"] || parsed[:path]
+    rescue
+      nil
     end
 
     def truncate(text, max_len)

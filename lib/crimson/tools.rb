@@ -1,6 +1,8 @@
 require 'json'
 require 'open3'
 require 'fileutils'
+require 'timeout'
+require 'diff/lcs'
 
 module Crimson
   module Tools
@@ -191,10 +193,12 @@ module Crimson
       def self.call(command:, timeout: 30)
         return "Error: No command provided" if command.nil? || command.strip.empty?
 
-        pid = nil
-        stdout, stderr, status = Open3.capture3(command) do |stdin|
-          stdin.close
-          pid = stdin.pid
+        stdout = ""
+        stderr = ""
+        status = nil
+
+        Timeout.timeout(timeout) do
+          stdout, stderr, status = Open3.capture3(command)
         end
 
         output = String.new
@@ -203,6 +207,8 @@ module Crimson
         output = "(no output)" if output.strip.empty?
         output << "\n(exit code: #{status.exitstatus})" unless status.success?
         output
+      rescue Timeout::Error
+        "Error: Command timed out after #{timeout} seconds"
       rescue => e
         "Error executing command: #{e.message}"
       end
@@ -265,7 +271,8 @@ module Crimson
 
           new_content = content.gsub(old_string, new_string)
           File.write(expanded, new_content)
-          "Successfully replaced #{count} occurrence(s) in #{path}"
+          diff = format_diff(old_string, new_string, path)
+          "Successfully replaced #{count} occurrence(s) in #{path}\n#{diff}"
         else
           count = content.scan(old_string).length
 
@@ -276,11 +283,42 @@ module Crimson
           else
             new_content = content.sub(old_string, new_string)
             File.write(expanded, new_content)
-            "Successfully edited #{path}"
+            diff = format_diff(old_string, new_string, path)
+            "Successfully edited #{path}\n#{diff}"
           end
         end
       rescue => e
         "Error editing file: #{e.message}"
+      end
+
+      def self.format_diff(old_text, new_text, path)
+        require 'pastel'
+        pastel = Pastel.new
+
+        old_lines = old_text.lines.map(&:chomp)
+        new_lines = new_text.lines.map(&:chomp)
+
+        changes = Diff::LCS.sdiff(old_lines, new_lines)
+
+        output = []
+        output << pastel.dim("--- #{path}")
+        output << pastel.dim("+++ #{path}")
+
+        changes.each do |change|
+          case change.action
+          when "-"
+            output << pastel.red("- #{change.old_element}")
+          when "+"
+            output << pastel.green("+ #{change.new_element}")
+          when "!"
+            output << pastel.red("- #{change.old_element}")
+            output << pastel.green("+ #{change.new_element}")
+          when "="
+            output << pastel.dim("  #{change.old_element}")
+          end
+        end
+
+        output.join("\n")
       end
     end
 
@@ -327,10 +365,11 @@ module Crimson
 
         expanded = File.expand_path(path)
         cmd = ["grep", "-rn", "--color=never", "-E"]
+        cmd += ["--exclude-dir=.git", "--exclude-dir=node_modules", "--exclude-dir=vendor"]
+        cmd += ["--exclude-dir=.bundle", "--exclude-dir=tmp", "--exclude-dir=log"]
         cmd += ["--include=#{file_pattern}"] if file_pattern
         cmd << pattern << expanded
 
-        pid = nil
         stdout, _stderr, status = Open3.capture3(*cmd)
 
         return "No matches found." if status.exitstatus == 1

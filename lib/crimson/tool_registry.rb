@@ -4,11 +4,15 @@ module Crimson
   class ToolRegistry
     def initialize
       @tools = {}
+      @openai_defs = nil
+      @anthropic_defs = nil
     end
 
     def register(tool_module)
       name = tool_module.const_get(:TOOL_NAME)
       @tools[name] = tool_module
+      @openai_defs = nil
+      @anthropic_defs = nil
     end
 
     def execute(tool_name, arguments)
@@ -30,11 +34,11 @@ module Crimson
     end
 
     def openai_definitions
-      @tools.values.map(&:definition)
+      @openai_defs ||= @tools.values.map(&:definition)
     end
 
     def anthropic_definitions
-      @tools.values.map(&:anthropic_definition)
+      @anthropic_defs ||= @tools.values.map(&:anthropic_definition)
     end
 
     def tool_names
