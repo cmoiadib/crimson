@@ -35,17 +35,29 @@ module Crimson
 
         streamed_content = false
         thinking = true
-        print @pastel.dim("  Thinking...")
+        spinner_thread = Thread.new do
+          frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+          i = 0
+          while thinking
+            $stdout.write("\r  \e[36m#{frames[i % frames.length]}\e[0m Thinking...")
+            $stdout.flush
+            i += 1
+            sleep 0.08
+          end
+          $stdout.write("\r\e[2K")
+          $stdout.flush
+        end
 
         response, usage = @client.chat(messages: messages, tools: tools) do |text_chunk, tool_event|
           if thinking
-            print "\r\e[K"
             thinking = false
+            spinner_thread.join(2)
+            $stdout.write("\r\e[2K")
+            $stdout.flush
           end
 
           if text_chunk
-            formatted = Crimson::Formatter.format(text_chunk)
-            print formatted
+            $stdout.print(Crimson::Formatter.format(text_chunk))
             $stdout.flush
             streamed_content = true
           elsif tool_event
@@ -54,8 +66,10 @@ module Crimson
         end
 
         if thinking
-          print "\r\e[K"
           thinking = false
+          spinner_thread.join(2)
+          $stdout.write("\r\e[2K")
+          $stdout.flush
         end
 
         track_usage(usage) if usage
@@ -156,10 +170,22 @@ module Crimson
 
       path = extract_path(args)
 
+      # Green for write operations, red for read operations
+      write_tools = ["write_file", "edit_file", "run_command"]
+      is_write = write_tools.include?(name)
+
       if path
-        puts @pastel.bold.red("  #{name}(#{path})")
+        if is_write
+          puts @pastel.bold.green("  #{name}(#{path})")
+        else
+          puts @pastel.bold.red("  #{name}(#{path})")
+        end
       else
-        puts @pastel.bold.cyan("  #{name}")
+        if is_write
+          puts @pastel.bold.green("  #{name}")
+        else
+          puts @pastel.bold.cyan("  #{name}")
+        end
       end
     end
 

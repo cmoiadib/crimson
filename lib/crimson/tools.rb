@@ -96,11 +96,56 @@ module Crimson
         expanded = File.expand_path(path)
         dir = File.dirname(expanded)
 
+        old_content = File.exist?(expanded) ? File.read(expanded) : nil
+
         FileUtils.mkdir_p(dir) unless Dir.exist?(dir)
         File.write(expanded, content)
-        "Successfully wrote to #{path}"
+
+        diff = format_diff(old_content, content, path)
+        "Successfully wrote to #{path}\n#{diff}"
       rescue => e
         "Error writing file: #{e.message}"
+      end
+
+      def self.format_diff(old_content, new_content, path)
+        require 'pastel'
+        pastel = Pastel.new
+
+        if old_content.nil?
+          # New file - show all lines as added
+          output = []
+          output << pastel.dim("--- /dev/null")
+          output << pastel.dim("+++ #{path}")
+          new_content.each_line do |line|
+            output << pastel.green("+ #{line.chomp}")
+          end
+          return output.join("\n")
+        end
+
+        old_lines = old_content.each_line.map(&:chomp)
+        new_lines = new_content.each_line.map(&:chomp)
+
+        changes = Diff::LCS.sdiff(old_lines, new_lines)
+
+        output = []
+        output << pastel.dim("--- #{path}")
+        output << pastel.dim("+++ #{path}")
+
+        changes.each do |change|
+          case change.action
+          when "-"
+            output << pastel.red("- #{change.old_element}")
+          when "+"
+            output << pastel.green("+ #{change.new_element}")
+          when "!"
+            output << pastel.red("- #{change.old_element}")
+            output << pastel.green("+ #{change.new_element}")
+          when "="
+            output << pastel.dim("  #{change.old_element}")
+          end
+        end
+
+        output.join("\n")
       end
     end
 
