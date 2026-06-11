@@ -1,0 +1,64 @@
+require_relative '../crimson'
+
+module Crimson
+  module CLI
+    def self.run(args)
+      command = args.first
+
+      case command
+      when "setup"
+        Crimson::Setup.run
+      when nil, "chat", "repl"
+        start_repl
+      when "help", "--help", "-h"
+        print_help
+      else
+        puts "Unknown command: #{command}"
+        print_help
+        exit 1
+      end
+    end
+
+    def self.start_repl
+      config = Crimson.config
+
+      unless config.valid?
+        puts "Crimson is not configured. Run `crimson setup` first."
+        exit 1
+      end
+
+      client = Crimson::Client.create(config)
+
+      registry = Crimson::ToolRegistry.new
+      Crimson::Tools.all.each { |tool| registry.register(tool) }
+
+      skills_dir = File.join(Dir.pwd, "skills")
+      skills_content = registry.load_skills(skills_dir)
+
+      system_prompt = skills_content.empty? ? File.read(File.join(__dir__, "..", "skills", "coding.md")) : skills_content
+
+      agent = Crimson::Agent.new(
+        client: client,
+        tool_registry: registry,
+        system_prompt: system_prompt
+      )
+
+      repl = Crimson::Repl.new(agent)
+      repl.start
+    end
+
+    def self.print_help
+      puts <<~HELP
+        Usage: crimson [command]
+
+        Commands:
+          setup   Configure your provider and API key
+          help    Show this help message
+
+        Running without a command starts the interactive REPL.
+      HELP
+    end
+  end
+end
+
+Crimson::CLI.run(ARGV)
