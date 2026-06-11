@@ -18,6 +18,7 @@ require_relative "crimson/repl"
 require_relative "crimson/setup"
 require_relative "crimson/project_context"
 require_relative "crimson/session_entry"
+require_relative "crimson/session_manager"
 
 module Crimson
   class Error < StandardError; end
