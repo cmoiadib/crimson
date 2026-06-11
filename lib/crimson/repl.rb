@@ -119,14 +119,17 @@ module Crimson
       case input
       when "/help"
         puts @pastel.bold("Commands:")
-        puts "  /help    Show help message"
-        puts "  /clear   Clear conversation history"
-        puts "  /model   Show current model"
-        puts "  /tools   List available tools"
-        puts "  /save    Save conversation to file"
-        puts "  /load    Load conversation from file"
-        puts "  /usage   Show token usage"
-        puts "  /exit    Exit crimson"
+        puts "  /help     Show help message"
+        puts "  /clear    Clear conversation history"
+        puts "  /model    Show current model"
+        puts "  /tools    List available tools"
+        puts "  /save     Save conversation to file"
+        puts "  /load     Load conversation from file"
+        puts "  /usage    Show token usage"
+        puts "  /sessions List sessions for current directory"
+        puts "  /fork     Fork current session into new branch"
+        puts "  /tree     Show conversation tree"
+        puts "  /exit     Exit crimson"
       when "/clear"
         @agent.reset
         puts @pastel.dim("Conversation cleared.")
@@ -149,6 +152,54 @@ module Crimson
         puts "  Prompt:     #{usage[:prompt]}"
         puts "  Completion: #{usage[:completion]}"
         puts "  Total:      #{usage[:total]}"
+      when "/sessions"
+        unless @agent.session_id
+          puts @pastel.dim("No active session.")
+          return
+        end
+        manager = Crimson::SessionManager.new
+        sessions = manager.list(cwd: Dir.pwd)
+        if sessions.empty?
+          puts @pastel.dim("No sessions found.")
+        else
+          puts @pastel.bold("Sessions:")
+          sessions.each do |s|
+            current = s.id == @agent.session_id ? " (current)" : ""
+            preview = s.preview || "(no preview)"
+            puts "  #{@pastel.cyan(s.id[0..7])} #{preview} #{s.last_timestamp}#{current}"
+          end
+        end
+      when "/fork"
+        unless @agent.session_id
+          puts @pastel.yellow("No active session to fork.")
+          return
+        end
+        manager = Crimson::SessionManager.new
+        last_id = @agent.instance_variable_get(:@last_entry_id)
+        new_id = manager.fork(@agent.session_id, cwd: Dir.pwd, from_entry_id: last_id)
+        @agent.resume_session(new_id, cwd: Dir.pwd, session_manager: manager)
+        puts @pastel.dim("Forked to new session: #{new_id[0..7]}")
+      when "/tree"
+        unless @agent.session_id
+          puts @pastel.dim("No active session.")
+          return
+        end
+        manager = Crimson::SessionManager.new
+        entries = manager.load(@agent.session_id, cwd: Dir.pwd)
+        entries.each do |e|
+          case e.role
+          when "user"
+            content_preview = e.content.to_s.length > 60 ? "#{e.content.to_s[0..57]}..." : e.content.to_s
+            puts "  #{@pastel.cyan("⏺")} #{content_preview}"
+          when "assistant"
+            tool_str = e.tool_calls.any? ? " [#{e.tool_calls.map { |t| t["name"] }.join(", ")}]" : ""
+            content_preview = e.content.to_s.length > 60 ? "#{e.content.to_s[0..57]}..." : e.content.to_s
+            puts "  #{@pastel.dim("↳ #{content_preview}#{tool_str}")}"
+          when "tool_result"
+            content_preview = e.content.to_s.length > 40 ? "#{e.content.to_s[0..37]}..." : e.content.to_s
+            puts "  #{@pastel.dim("  → #{e.tool_name}: #{content_preview}")}"
+          end
+        end
       else
         puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
       end
