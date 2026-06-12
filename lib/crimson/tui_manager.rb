@@ -3,10 +3,11 @@
 require_relative "tui/renderer"
 require_relative "tui/status_bar"
 require_relative "tui/tool_panel"
+require_relative "tui/markdown"
 
 module Crimson
   class TuiManager
-    attr_reader :renderer, :status_bar, :tool_panels
+    attr_reader :renderer, :status_bar, :tool_panels, :markdown
     attr_accessor :active, :keyboard_shortcuts_enabled
 
     def initialize(agent)
@@ -14,6 +15,7 @@ module Crimson
       @renderer = TuiRenderer.new
       @status_bar = TuiStatusBar.new
       @tool_panels = []
+      @markdown = TuiMarkdown.new
       @active = true
       @keyboard_shortcuts_enabled = true
       setup_keyboard_handling
@@ -72,6 +74,11 @@ module Crimson
 
     def append_output(text)
       @renderer.append_output(text)
+    end
+
+    def append_markdown(text)
+      rendered = @markdown.render(text)
+      @renderer.append_output(rendered)
     end
 
     def clear_output

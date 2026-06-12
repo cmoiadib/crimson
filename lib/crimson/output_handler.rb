@@ -32,7 +32,7 @@ module Crimson
         stop_spinner unless @first_token
         @first_token = true
         @render_mutex.synchronize { @render_buffer << delta }
-        @tui.append_output(delta)
+        @tui.append_markdown(delta)
         start_render_thread unless @render_thread&.alive?
         @tui.update_status_bar(status: "streaming")
       end
