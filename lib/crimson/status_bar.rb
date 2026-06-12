@@ -70,7 +70,6 @@ module Crimson
 
     def write(text)
       @io_mutex.synchronize do
-        $stdout.write("\e[#{@input_row + 1};1H")
         $stdout.write(text)
         $stdout.flush
       end
@@ -86,7 +85,6 @@ module Crimson
 
     def write_raw(data)
       @io_mutex.synchronize do
-        $stdout.write("\e[#{@input_row + 1};1H")
         $stdout.write(data)
         $stdout.flush
       end
@@ -143,6 +141,8 @@ module Crimson
         info_line = draw_info_line
 
         @io_mutex.synchronize do
+          $stdout.write("\e7")
+
           $stdout.write("\e[#{bar_start + 1};1H")
           $stdout.write("\e[2K")
           $stdout.write(@pastel.dim("─" * width))
@@ -155,6 +155,7 @@ module Crimson
           $stdout.write("\e[2K")
           $stdout.write(info_line)
 
+          $stdout.write("\e8")
           $stdout.flush
         end
       end
