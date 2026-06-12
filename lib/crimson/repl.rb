@@ -2,7 +2,6 @@
 
 require "reline"
 require "pastel"
-require_relative "tui_manager"
 
 module Crimson
   class Repl
@@ -11,14 +10,14 @@ module Crimson
       @pastel = Pastel.new
       @output_handler = OutputHandler.new
       @output_handler.attach(agent)
-      @tui = @output_handler.instance_variable_get(:@tui)
       setup_readline
     end
 
     def start
+      @output_handler.start
+
       puts @pastel.bold("Crimson v#{VERSION}")
       puts @pastel.dim("Type /help for commands, /exit to quit")
-      puts @pastel.dim("Keyboard shortcuts: Ctrl+C=Cancel Ctrl+E=Expand Ctrl+T=Tool panels Ctrl+L=Clear")
       puts
 
       loop do
@@ -40,6 +39,7 @@ module Crimson
         puts @pastel.red("Error: #{e.message}")
       end
 
+      @output_handler.stop
       puts @pastel.dim("Goodbye!")
     end
 
@@ -51,7 +51,6 @@ module Crimson
         show_help
       when "/clear"
         @agent.reset
-        @tui&.clear_output
         puts @pastel.dim("Conversation cleared.")
       when "/model"
         handle_model_switch
@@ -77,10 +76,6 @@ module Crimson
         handle_tree
       when "/compact"
         handle_compact
-      when "/tui"
-        toggle_tui
-      when "/status"
-        toggle_status_bar
       else
         if input.start_with?("/name ")
           handle_name_set(input[6..].strip)
@@ -106,15 +101,7 @@ module Crimson
       puts "  /fork       Fork current session into new branch"
       puts "  /tree       Show conversation tree"
       puts "  /compact    Compact conversation history"
-      puts "  /tui        Toggle TUI panels"
-      puts "  /status     Toggle status bar"
       puts "  /exit       Exit crimson"
-      puts
-      puts @pastel.bold("Keyboard Shortcuts:")
-      puts "  Ctrl+C      Cancel current operation"
-      puts "  Ctrl+E      Expand last message"
-      puts "  Ctrl+T      Toggle tool panels"
-      puts "  Ctrl+L      Clear screen"
     end
 
     def show_tools
@@ -293,18 +280,6 @@ module Crimson
       else
         puts @pastel.yellow("Compaction not enabled.")
       end
-    end
-
-    def toggle_tui
-      @tui&.toggle_tool_panels
-      status = @tui&.renderer&.show_tool_panels ? "enabled" : "disabled"
-      puts @pastel.dim("TUI panels #{status}.")
-    end
-
-    def toggle_status_bar
-      @tui&.toggle_status_bar
-      status = @tui&.renderer&.show_status_bar ? "enabled" : "disabled"
-      puts @pastel.dim("Status bar #{status}.")
     end
 
     def setup_readline
