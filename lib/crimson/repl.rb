@@ -2,6 +2,7 @@
 
 require "reline"
 require "pastel"
+require_relative "tui_manager"
 
 module Crimson
   class Repl
@@ -10,12 +11,14 @@ module Crimson
       @pastel = Pastel.new
       @output_handler = OutputHandler.new
       @output_handler.attach(agent)
+      @tui = @output_handler.instance_variable_get(:@tui)
       setup_readline
     end
 
     def start
       puts @pastel.bold("Crimson v#{VERSION}")
       puts @pastel.dim("Type /help for commands, /exit to quit")
+      puts @pastel.dim("Keyboard shortcuts: Ctrl+C=Cancel Ctrl+E=Expand Ctrl+T=Tool panels Ctrl+L=Clear")
       puts
 
       loop do
@@ -31,6 +34,8 @@ module Crimson
         else
           @agent.prompt(input)
         end
+      rescue Interrupt
+        puts "\n" + @pastel.yellow("Operation cancelled by user.")
       rescue => e
         puts @pastel.red("Error: #{e.message}")
       end
@@ -43,46 +48,23 @@ module Crimson
     def handle_command(input)
       case input
       when "/help"
-        puts @pastel.bold("Commands:")
-        puts "  /help       Show help message"
-        puts "  /clear      Clear conversation history"
-        puts "  /model      Switch model (interactive selector)"
-        puts "  /thinking   Set thinking level (off/low/medium/high)"
-        puts "  /tools      List available tools"
-        puts "  /save       Save conversation to file"
-        puts "  /load       Load conversation from file"
-        puts "  /usage      Show token usage and cost"
-        puts "  /sessions   List sessions for current directory"
-        puts "  /name       Set session name"
-        puts "  /session    Show session info"
-        puts "  /fork       Fork current session into new branch"
-        puts "  /tree       Show conversation tree"
-        puts "  /compact    Compact conversation history"
-        puts "  /exit       Exit crimson"
+        show_help
       when "/clear"
         @agent.reset
+        @tui&.clear_output
         puts @pastel.dim("Conversation cleared.")
       when "/model"
         handle_model_switch
       when "/thinking"
         handle_thinking
       when "/tools"
-        puts @pastel.bold("Available tools:")
-        @agent.tool_registry.tool_names.each do |name|
-          puts "  - #{name}"
-        end
+        show_tools
       when "/save"
         puts @agent.save_history
       when "/load"
         puts @agent.load_history
       when "/usage"
-        usage = @agent.token_usage
-        cost = @agent.cost_tracker.total_cost
-        puts @pastel.bold("Token usage:")
-        puts "  Prompt:     #{usage[:prompt]}"
-        puts "  Completion: #{usage[:completion]}"
-        puts "  Total:      #{usage[:total]}"
-        puts "  Cost:       $#{format('%.4f', cost)}" if cost > 0
+        show_usage
       when "/sessions"
         handle_sessions
       when "/name"
@@ -94,12 +76,11 @@ module Crimson
       when "/tree"
         handle_tree
       when "/compact"
-        if @agent.compactor
-          result = @agent.compact!
-          puts @pastel.dim(result)
-        else
-          puts @pastel.yellow("Compaction not enabled.")
-        end
+        handle_compact
+      when "/tui"
+        toggle_tui
+      when "/status"
+        toggle_status_bar
       else
         if input.start_with?("/name ")
           handle_name_set(input[6..].strip)
@@ -107,6 +88,50 @@ module Crimson
           puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
         end
       end
+    end
+
+    def show_help
+      puts @pastel.bold("Commands:")
+      puts "  /help       Show help message"
+      puts "  /clear      Clear conversation history"
+      puts "  /model      Switch model (interactive selector)"
+      puts "  /thinking   Set thinking level (off/low/medium/high)"
+      puts "  /tools      List available tools"
+      puts "  /save       Save conversation to file"
+      puts "  /load       Load conversation from file"
+      puts "  /usage      Show token usage and cost"
+      puts "  /sessions   List sessions for current directory"
+      puts "  /name       Set session name"
+      puts "  /session    Show session info"
+      puts "  /fork       Fork current session into new branch"
+      puts "  /tree       Show conversation tree"
+      puts "  /compact    Compact conversation history"
+      puts "  /tui        Toggle TUI panels"
+      puts "  /status     Toggle status bar"
+      puts "  /exit       Exit crimson"
+      puts
+      puts @pastel.bold("Keyboard Shortcuts:")
+      puts "  Ctrl+C      Cancel current operation"
+      puts "  Ctrl+E      Expand last message"
+      puts "  Ctrl+T      Toggle tool panels"
+      puts "  Ctrl+L      Clear screen"
+    end
+
+    def show_tools
+      puts @pastel.bold("Available tools:")
+      @agent.tool_registry.tool_names.each do |name|
+        puts "  - #{name}"
+      end
+    end
+
+    def show_usage
+      usage = @agent.token_usage
+      cost = @agent.cost_tracker.total_cost
+      puts @pastel.bold("Token usage:")
+      puts "  Prompt:     #{usage[:prompt]}"
+      puts "  Completion: #{usage[:completion]}"
+      puts "  Total:      #{usage[:total]}"
+      puts "  Cost:       $#{format('%.4f', cost)}" if cost > 0
     end
 
     def handle_sessions
@@ -259,6 +284,27 @@ module Crimson
       return "" if text.nil?
       cleaned = text.gsub("\n", "\\n")
       cleaned.length > max_len ? "#{cleaned[0...max_len]}..." : cleaned
+    end
+
+    def handle_compact
+      if @agent.compactor
+        result = @agent.compact!
+        puts @pastel.dim(result)
+      else
+        puts @pastel.yellow("Compaction not enabled.")
+      end
+    end
+
+    def toggle_tui
+      @tui&.toggle_tool_panels
+      status = @tui&.renderer&.show_tool_panels ? "enabled" : "disabled"
+      puts @pastel.dim("TUI panels #{status}.")
+    end
+
+    def toggle_status_bar
+      @tui&.toggle_status_bar
+      status = @tui&.renderer&.show_status_bar ? "enabled" : "disabled"
+      puts @pastel.dim("Status bar #{status}.")
     end
 
     def setup_readline
