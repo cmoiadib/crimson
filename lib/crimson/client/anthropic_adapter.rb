@@ -23,6 +23,12 @@ module Crimson
         params[:messages] = chat_msgs
         params[:tools] = tools unless tools.empty?
 
+        if @config.thinking_level && @config.thinking_level != "off"
+          budget = thinking_budget(@config.thinking_level)
+          params[:thinking] = { type: "enabled", budget_tokens: budget }
+          params[:max_tokens] = [params[:max_tokens], budget * 2].max
+        end
+
         if block_given?
           stream_chat(params, &stream_callback)
         else
@@ -57,6 +63,15 @@ module Crimson
         system_text = nil if system_text.empty?
 
         [system_text, chat_msgs]
+      end
+
+      def thinking_budget(level)
+        case level
+        when "low" then 2_048
+        when "medium" then 10_000
+        when "high" then 32_000
+        else 10_000
+        end
       end
 
       def stream_chat(params, &callback)

@@ -7,7 +7,8 @@ module Crimson
   class SessionEntry
     attr_accessor :id, :parent_id, :role, :content,
                   :tool_calls, :tool_call_id, :tool_name,
-                  :token_usage, :timestamp
+                  :token_usage, :timestamp,
+                  :read_files, :modified_files
 
     def initialize(attrs = {})
       @id = attrs[:id] || SecureRandom.uuid
@@ -19,6 +20,8 @@ module Crimson
       @tool_name = attrs[:tool_name]
       @token_usage = attrs[:token_usage] || {}
       @timestamp = attrs[:timestamp] || Time.now.utc.iso8601
+      @read_files = attrs[:read_files] || []
+      @modified_files = attrs[:modified_files] || []
     end
 
     def to_h
@@ -33,6 +36,8 @@ module Crimson
       h[:toolCallId] = @tool_call_id if @tool_call_id
       h[:toolName] = @tool_name if @tool_name
       h[:tokenUsage] = @token_usage unless @token_usage.empty?
+      h[:readFiles] = @read_files unless @read_files.empty?
+      h[:modifiedFiles] = @modified_files unless @modified_files.empty?
       h
     end
 
@@ -50,11 +55,13 @@ module Crimson
         tool_call_id: hash[:toolCallId] || hash["toolCallId"],
         tool_name: hash[:toolName] || hash["toolName"],
         token_usage: hash[:tokenUsage] || hash["tokenUsage"] || {},
-        timestamp: hash[:timestamp] || hash["timestamp"]
+        timestamp: hash[:timestamp] || hash["timestamp"],
+        read_files: hash[:readFiles] || hash["readFiles"] || [],
+        modified_files: hash[:modifiedFiles] || hash["modifiedFiles"] || []
       )
     end
 
-    def self.from_message(message, parent_id:)
+    def self.from_message(message, parent_id:, read_files: [], modified_files: [])
       case message
       when Message::User
         new(role: "user", content: message.content, parent_id: parent_id)
@@ -74,7 +81,9 @@ module Crimson
           content: message.content,
           parent_id: parent_id,
           tool_call_id: message.tool_call_id,
-          tool_name: message.name
+          tool_name: message.name,
+          read_files: read_files,
+          modified_files: modified_files
         )
       else
         new(role: "system", content: message&.content.to_s, parent_id: parent_id)

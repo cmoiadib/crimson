@@ -4,14 +4,17 @@ require 'json'
 
 module Crimson
   class Config
-    attr_reader :provider, :model, :api_key, :base_url, :max_tokens
+    attr_reader :provider, :model, :api_key, :base_url, :max_tokens, :thinking_level
 
-    def initialize(provider: nil, model: nil, api_key: nil, base_url: nil, max_tokens: 8192)
+    VALID_THINKING_LEVELS = %w[off low medium high].freeze
+
+    def initialize(provider: nil, model: nil, api_key: nil, base_url: nil, max_tokens: 8192, thinking_level: nil)
       @provider = provider
       @model = model
       @api_key = api_key
       @base_url = base_url
       @max_tokens = max_tokens
+      @thinking_level = validate_thinking_level(thinking_level)
     end
 
     def self.load
@@ -23,7 +26,8 @@ module Crimson
         model: data["model"],
         api_key: data["api_key"],
         base_url: data["base_url"],
-        max_tokens: data["max_tokens"] || 1000
+        max_tokens: data["max_tokens"] || 1000,
+        thinking_level: data["thinking_level"]
       )
     rescue JSON::ParserError => e
       raise Error, "Invalid config file: #{e.message}"
@@ -37,7 +41,8 @@ module Crimson
         model: @model,
         api_key: @api_key,
         base_url: @base_url,
-        max_tokens: @max_tokens
+        max_tokens: @max_tokens,
+        thinking_level: @thinking_level
       }
 
       File.write(Crimson::CONFIG_FILE, JSON.pretty_generate(data))
@@ -50,6 +55,18 @@ module Crimson
       return false if @api_key.nil? || @api_key.empty?
       return false if @provider == "custom" && (@base_url.nil? || @base_url.empty?)
       true
+    end
+
+    def thinking_level=(level)
+      @thinking_level = validate_thinking_level(level)
+    end
+
+    private
+
+    def validate_thinking_level(level)
+      return nil if level.nil?
+      level = level.to_s.downcase
+      VALID_THINKING_LEVELS.include?(level) ? level : nil
     end
   end
 end
