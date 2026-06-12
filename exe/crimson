@@ -146,10 +146,8 @@ module Crimson
 
     def self.build_system_prompt(registry)
       default_skill = read_default_skill
-      project_skills = registry.load_skills(File.join(Dir.pwd, "skills"))
 
       parts = [default_skill.strip]
-      parts << project_skills.strip unless project_skills.empty?
 
       context = Crimson::ProjectContext.detect
       parts << "## Project Context\n\n#{context}" if context
@@ -166,12 +164,21 @@ module Crimson
 
     def self.read_default_skill
       gem_skill = File.join(Crimson::SKILLS_DIR, "coding.md")
-      return File.read(gem_skill) if File.exist?(gem_skill)
+      raw = if File.exist?(gem_skill)
+        File.read(gem_skill)
+      else
+        gem_root = File.expand_path("../..", __FILE__)
+        bundled = File.join(gem_root, "skills", "coding.md")
+        File.read(bundled)
+      end
 
-      # Fallback: read from gem's bundled skills
-      gem_root = File.expand_path("../..", __FILE__)
-      bundled = File.join(gem_root, "skills", "coding.md")
-      File.read(bundled)
+      strip_front_matter(raw)
+    end
+
+    def self.strip_front_matter(content)
+      return content unless content.start_with?("---")
+      parts = content.split("---", 3)
+      parts.length >= 3 ? parts[2].strip : content
     end
 
     def self.print_help
