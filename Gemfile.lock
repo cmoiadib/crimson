@@ -5,7 +5,6 @@ PATH
       anthropic (~> 1.48)
       openai (~> 0.66)
       pastel (~> 0.8)
-      ratatui_ruby (~> 1.5)
       reline (~> 0.6)
       tiktoken_ruby (~> 0.0.5)
       tty-prompt (~> 0.23)
@@ -40,15 +39,8 @@ GEM
     pry-byebug (3.12.0)
       byebug (~> 13.0)
       pry (>= 0.13, < 0.17)
-    rake-compiler-dock (1.12.0)
-    ratatui_ruby (1.5.0-arm64-darwin-24)
-      rb_sys (~> 0.9)
-      rexml (~> 3.4)
-    rb_sys (0.9.128)
-      rake-compiler-dock (= 1.12.0)
     reline (0.6.3)
       io-console (~> 0.5)
-    rexml (3.4.0)
     rspec (3.13.2)
       rspec-core (~> 3.13.0)
       rspec-expectations (~> 3.13.0)
@@ -103,11 +95,7 @@ CHECKSUMS
   pastel (0.8.0) sha256=481da9fb7d2f6e6b1a08faf11fa10363172dc40fd47848f096ae21209f805a75
   pry (0.16.0) sha256=d76c69065698ed1f85e717bd33d7942c38a50868f6b0673c636192b3d1b6054e
   pry-byebug (3.12.0) sha256=594e094ae8a8390a7ad4c7b36ae36e13304ed02664c67417d108dc5f7213d1b7
-  rake-compiler-dock (1.12.0)
-  ratatui_ruby (1.5.0-arm64-darwin-24)
-  rb_sys (0.9.128)
   reline (0.6.3) sha256=1198b04973565b36ec0f11542ab3f5cfeeec34823f4e54cebde90968092b1835
-  rexml (3.4.0)
   rspec (3.13.2) sha256=206284a08ad798e61f86d7ca3e376718d52c0bc944626b2349266f239f820587
   rspec-core (3.13.6) sha256=a8823c6411667b60a8bca135364351dda34cd55e44ff94c4be4633b37d828b2d
   rspec-expectations (3.13.5) sha256=33a4d3a1d95060aea4c94e9f237030a8f9eae5615e9bd85718fe3a09e4b58836
