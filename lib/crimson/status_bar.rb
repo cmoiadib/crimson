@@ -92,7 +92,7 @@ module Crimson
 
     def move_to_input
       @io_mutex.synchronize do
-        $stdout.write("\e[#{@input_row + 1};1H")
+        $stdout.write("\e[#{@scroll_bottom};1H")
         $stdout.flush
       end
     end
