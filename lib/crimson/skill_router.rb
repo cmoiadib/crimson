@@ -128,7 +128,13 @@ module Crimson
     end
 
     def triggers_match?(message, triggers)
-      triggers&.any? { |t| message.include?(t) }
+      triggers&.any? do |t|
+        if t.include?(" ")
+          message.include?(t)
+        else
+          message.match?(/\b#{Regexp.escape(t)}\b/)
+        end
+      end
     end
 
     def strip_front_matter(content)

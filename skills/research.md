@@ -1,6 +1,6 @@
 ---
 domain: analysis
-triggers: [how does, where is, explain, understand, explore, find where, trace, walk me through, what does, what is, how do, where does, architecture, structure]
+triggers: [how does, where is, explain, understand, explore, find where, trace, walk me through, what does, what is, how do, where does, architecture, structure, analyze, analyse, inspect, investigate]
 priority: 8
 auto_inject: false
 ---
