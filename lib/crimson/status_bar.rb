@@ -16,8 +16,6 @@ module Crimson
       @status = :idle
       @tool_name = nil
       @spinner_idx = 0
-      @spinner_thread = nil
-      @spinner_active = false
       @mutex = Mutex.new
       @stopped = false
       @input_row = 0
@@ -36,7 +34,6 @@ module Crimson
     def stop
       return if @stopped
       @stopped = true
-      stop_spinner
       leave_alternate_screen
     end
 
@@ -49,17 +46,16 @@ module Crimson
         @status = status if status
         @tool_name = tool_name unless tool_name == :__clear
         @tool_name = nil if tool_name == :__clear
+        @spinner_idx += 1 if @status == :thinking
       end
       draw
     end
 
     def show_thinking
       update(status: :thinking)
-      start_spinner
     end
 
     def hide_thinking
-      stop_spinner
       update(status: :idle)
     end
 
@@ -85,7 +81,7 @@ module Crimson
     end
 
     def move_to_input
-      $stdout.write(move_to(0, @input_row))
+      $stdout.write("\e[#{@input_row + 1};1H")
       $stdout.flush
     end
 
@@ -100,7 +96,6 @@ module Crimson
 
     def enter_alternate_screen
       $stdout.write("\e[?1049h")
-      $stdout.write("\e[?25l")
       $stdout.flush
     end
 
@@ -124,30 +119,26 @@ module Crimson
         bar_start = @scroll_bottom
         width = term_size[1]
 
-        # Line 1: separator
-        $stdout.write(move_to(0, bar_start))
+        # Draw status bar at bottom rows (outside scroll region)
+        $stdout.write("\e[#{bar_start + 1};1H")
         $stdout.write("\e[2K")
         $stdout.write(@pastel.dim("─" * width))
 
-        # Line 2: model + provider + status
-        $stdout.write(move_to(0, bar_start + 1))
+        $stdout.write("\e[#{bar_start + 2};1H")
         $stdout.write("\e[2K")
-        $stdout.write(draw_status_line(width))
+        $stdout.write(draw_status_line)
 
-        # Line 3: tokens + cost + tool
-        $stdout.write(move_to(0, bar_start + 2))
+        $stdout.write("\e[#{bar_start + 3};1H")
         $stdout.write("\e[2K")
-        $stdout.write(draw_info_line(width))
+        $stdout.write(draw_info_line)
 
-        $stdout.write(move_to(0, @input_row))
         $stdout.flush
       end
     end
 
-    def draw_status_line(width)
+    def draw_status_line
       parts = []
 
-      # Status indicator
       case @status
       when :thinking
         frame = SPINNER[@spinner_idx % SPINNER.length]
@@ -160,7 +151,6 @@ module Crimson
         parts << @pastel.dim(" ● ready")
       end
 
-      # Model + provider
       unless @model.empty?
         parts << @pastel.bold.cyan(" #{@model}")
       end
@@ -171,7 +161,7 @@ module Crimson
       parts.join
     end
 
-    def draw_info_line(width)
+    def draw_info_line
       parts = []
 
       if @tokens[:total] > 0
@@ -185,25 +175,6 @@ module Crimson
       parts.empty? ? "" : parts.join
     end
 
-    def start_spinner
-      return if @spinner_active
-      @spinner_active = true
-      @spinner_thread = Thread.new do
-        while @spinner_active
-          @spinner_idx += 1
-          draw
-          sleep 0.1
-        end
-      end
-    end
-
-    def stop_spinner
-      return unless @spinner_active
-      @spinner_active = false
-      @spinner_thread&.join(2)
-      @spinner_thread = nil
-    end
-
     def setup_signals
       trap("WINCH") { @resize_pending = true }
       at_exit { stop }
@@ -213,10 +184,6 @@ module Crimson
       IO.console&.winsize || [24, 80]
     rescue
       [24, 80]
-    end
-
-    def move_to(col, row)
-      "\e[#{row + 1};#{col + 1}H"
     end
   end
 end
