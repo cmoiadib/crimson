@@ -17,10 +17,8 @@ module Crimson
     def start
       @output_handler.start
 
-      # Show welcome message via TUI
-      @tui.append_markdown("**Crimson v#{VERSION}**")
-      @tui.append_markdown("Type `/help` for commands, `/exit` to quit")
-      @tui.request_render
+      @tui.add_message(:assistant, "**Crimson v#{VERSION}**")
+      @tui.add_message(:assistant, "Type `/help` for commands, `/exit` to quit")
 
       loop do
         input = Reline.readline("> ", true)
@@ -33,19 +31,18 @@ module Crimson
         if input.start_with?("/")
           handle_command(input)
         else
+          @tui.add_message(:user, input)
           @agent.prompt(input)
         end
       rescue Interrupt
-        @tui.append_markdown("*Operation cancelled by user.*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*Operation cancelled by user.*")
       rescue => e
-        @tui.append_markdown("**Error:** #{e.message}")
-        @tui.request_render
+        @tui.add_message(:error, e.message)
       end
 
       @output_handler.stop
-      @tui.append_markdown("*Goodbye!*")
-      @tui.request_render
+      @tui.add_message(:assistant, "*Goodbye!*")
+      sleep 0.2
     end
 
     private
@@ -56,10 +53,8 @@ module Crimson
         show_help
       when "/clear"
         @agent.reset
-        @tui.clear_markdown
-        @tui.clear_tool_executions
-        @tui.append_markdown("*Conversation cleared.*")
-        @tui.request_render
+        @tui.clear
+        @tui.add_message(:assistant, "*Conversation cleared.*")
       when "/model"
         handle_model_switch
       when "/thinking"
@@ -67,11 +62,9 @@ module Crimson
       when "/tools"
         show_tools
       when "/save"
-        @tui.append_markdown(@agent.save_history)
-        @tui.request_render
+        @tui.add_message(:assistant, @agent.save_history)
       when "/load"
-        @tui.append_markdown(@agent.load_history)
-        @tui.request_render
+        @tui.add_message(:assistant, @agent.load_history)
       when "/usage"
         show_usage
       when "/sessions"
@@ -90,66 +83,57 @@ module Crimson
         if input.start_with?("/name ")
           handle_name_set(input[6..].strip)
         else
-          @tui.append_markdown("*Unknown command: #{input}. Type `/help` for commands.*")
-          @tui.request_render
+          @tui.add_message(:assistant, "*Unknown command: #{input}. Type `/help` for commands.*")
         end
       end
     end
 
     def show_help
-      help_text = <<~HELP
-        **Commands:**
-        - `/help`       Show help message
-        - `/clear`      Clear conversation history
-        - `/model`      Switch model (interactive selector)
-        - `/thinking`   Set thinking level (off/low/medium/high)
-        - `/tools`      List available tools
-        - `/save`       Save conversation to file
-        - `/load`       Load conversation from file
-        - `/usage`      Show token usage and cost
-        - `/sessions`   List sessions for current directory
-        - `/name`       Set session name
-        - `/session`    Show session info
-        - `/fork`       Fork current session into new branch
-        - `/tree`       Show conversation tree
-        - `/compact`    Compact conversation history
-        - `/exit`       Exit crimson
-      HELP
-      @tui.append_markdown(help_text)
-      @tui.request_render
+      help_text = "**Commands:**\n" \
+        "- `/help`       Show help message\n" \
+        "- `/clear`      Clear conversation history\n" \
+        "- `/model`      Switch model\n" \
+        "- `/thinking`   Set thinking level\n" \
+        "- `/tools`      List available tools\n" \
+        "- `/save`       Save conversation\n" \
+        "- `/load`       Load conversation\n" \
+        "- `/usage`      Show token usage\n" \
+        "- `/sessions`   List sessions\n" \
+        "- `/name`       Set session name\n" \
+        "- `/session`    Show session info\n" \
+        "- `/fork`       Fork session\n" \
+        "- `/tree`       Show conversation tree\n" \
+        "- `/compact`    Compact history\n" \
+        "- `/exit`       Exit crimson"
+      @tui.add_message(:assistant, help_text)
     end
 
     def show_tools
       tools = @agent.tool_registry.tool_names.map { |n| "- #{n}" }.join("\n")
-      @tui.append_markdown("**Available tools:**\n#{tools}")
-      @tui.request_render
+      @tui.add_message(:assistant, "**Available tools:**\n#{tools}")
     end
 
     def show_usage
       usage = @agent.token_usage
       cost = @agent.cost_tracker.total_cost
-      text = <<~USAGE
-        **Token usage:**
-        - Prompt:     #{usage[:prompt]}
-        - Completion: #{usage[:completion]}
-        - Total:      #{usage[:total]}
-      USAGE
-      text += "- Cost:       $#{format('%.4f', cost)}" if cost > 0
-      @tui.append_markdown(text)
-      @tui.request_render
+      text = "**Token usage:**\n" \
+        "- Prompt:     #{usage[:prompt]}\n" \
+        "- Completion: #{usage[:completion]}\n" \
+        "- Total:      #{usage[:total]}"
+      text += "\n- Cost:       $#{format('%.4f', cost)}" if cost > 0
+      @tui.add_message(:assistant, text)
     end
 
     def handle_sessions
       unless @agent.session_id
-        @tui.append_markdown("*No active session.*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*No active session.*")
         return
       end
 
       manager = SessionManager.new
       sessions = manager.list(cwd: Dir.pwd)
       if sessions.empty?
-        @tui.append_markdown("*No sessions found.*")
+        @tui.add_message(:assistant, "*No sessions found.*")
       else
         lines = ["**Sessions:**"]
         sessions.each do |s|
@@ -158,32 +142,29 @@ module Crimson
           preview = s.preview || "(no preview)"
           lines << "- `#{s.id[0..7]}` #{name_str}#{preview} #{s.last_timestamp}#{current}"
         end
-        @tui.append_markdown(lines.join("\n"))
+        @tui.add_message(:assistant, lines.join("\n"))
       end
-      @tui.request_render
     end
 
     def handle_model_switch
       config = @agent.config || Crimson.config
-      @tui.append_markdown("*Current: #{PROVIDERS[config.provider.to_sym][:name]} / #{config.model}*")
+      @tui.add_message(:assistant, "*Current: #{PROVIDERS[config.provider.to_sym][:name]} / #{config.model}*")
 
       begin
         prompt = TTY::Prompt.new
         models = fetch_available_models(config)
         if models.empty?
-          @tui.append_markdown("*Could not fetch model list. Showing current model only.*")
-          @tui.request_render
+          @tui.add_message(:assistant, "*Could not fetch model list.*")
           return
         end
 
         selected = prompt.select("Select model:", models.map { |m| { name: m, value: m } })
         @agent.switch_model(selected)
         @agent.config.save
-        @tui.append_markdown("*Switched to: #{selected}*")
+        @tui.add_message(:assistant, "*Switched to: #{selected}*")
       rescue => e
-        @tui.append_markdown("**Error switching model:** #{e.message}")
+        @tui.add_message(:error, "Error switching model: #{e.message}")
       end
-      @tui.request_render
     end
 
     def fetch_available_models(config)
@@ -212,7 +193,7 @@ module Crimson
     def handle_thinking
       config = @agent.config || Crimson.config
       current = config.thinking_level || "off"
-      @tui.append_markdown("*Current thinking level: #{current}*")
+      @tui.add_message(:assistant, "*Current thinking level: #{current}*")
 
       begin
         prompt = TTY::Prompt.new
@@ -220,45 +201,38 @@ module Crimson
         config.thinking_level = level
         config.save
         @agent.config = config
-        @tui.append_markdown("*Thinking level set to: #{level}*")
+        @tui.add_message(:assistant, "*Thinking level set to: #{level}*")
       rescue => e
-        @tui.append_markdown("**Error setting thinking level:** #{e.message}")
+        @tui.add_message(:error, "Error setting thinking level: #{e.message}")
       end
-      @tui.request_render
     end
 
     def handle_name
       unless @agent.session_id
-        @tui.append_markdown("*No active session.*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*No active session.*")
         return
       end
-      @tui.append_markdown("*Usage: /name <session name>*")
-      @tui.request_render
+      @tui.add_message(:assistant, "*Usage: /name <session name>*")
     end
 
     def handle_name_set(name)
       unless @agent.session_id
-        @tui.append_markdown("*No active session.*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*No active session.*")
         return
       end
       if name.empty?
-        @tui.append_markdown("*Usage: /name <session name>*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*Usage: /name <session name>*")
         return
       end
 
       manager = SessionManager.new
       manager.set_name(@agent.session_id, cwd: Dir.pwd, name: name)
-      @tui.append_markdown("*Session name set to: #{name}*")
-      @tui.request_render
+      @tui.add_message(:assistant, "*Session name set to: #{name}*")
     end
 
     def handle_session_info
       unless @agent.session_id
-        @tui.append_markdown("*No active session.*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*No active session.*")
         return
       end
 
@@ -269,25 +243,21 @@ module Crimson
       usage = @agent.token_usage
       cost = @agent.cost_tracker.total_cost
 
-      text = <<~INFO
-        **Session info:**
-        - ID:       #{@agent.session_id}
-        - Name:     #{header&.dig('name') || '(unnamed)'}
-        - Created:  #{header&.dig('timestamp')}
-        - CWD:      #{@agent.session_cwd}
-        - Entries:  #{entries.length}
-        - Tokens:   #{usage[:total]} (#{usage[:prompt]} prompt + #{usage[:completion]} completion)
-      INFO
-      text += "- Cost:     $#{format('%.4f', cost)}" if cost > 0
+      text = "**Session info:**\n" \
+        "- ID:       #{@agent.session_id}\n" \
+        "- Name:     #{header&.dig('name') || '(unnamed)'}\n" \
+        "- Created:  #{header&.dig('timestamp')}\n" \
+        "- CWD:      #{@agent.session_cwd}\n" \
+        "- Entries:  #{entries.length}\n" \
+        "- Tokens:   #{usage[:total]} (#{usage[:prompt]} prompt + #{usage[:completion]} completion)"
+      text += "\n- Cost:     $#{format('%.4f', cost)}" if cost > 0
 
-      @tui.append_markdown(text)
-      @tui.request_render
+      @tui.add_message(:assistant, text)
     end
 
     def handle_fork
       unless @agent.session_id
-        @tui.append_markdown("*No active session to fork.*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*No active session to fork.*")
         return
       end
 
@@ -295,14 +265,12 @@ module Crimson
       last_id = @agent.instance_variable_get(:@last_entry_id)
       new_id = manager.fork(@agent.session_id, cwd: Dir.pwd, from_entry_id: last_id)
       @agent.resume_session(new_id, cwd: Dir.pwd, session_manager: manager)
-      @tui.append_markdown("*Forked to new session: #{new_id[0..7]}*")
-      @tui.request_render
+      @tui.add_message(:assistant, "*Forked to new session: #{new_id[0..7]}*")
     end
 
     def handle_tree
       unless @agent.session_id
-        @tui.append_markdown("*No active session.*")
-        @tui.request_render
+        @tui.add_message(:assistant, "*No active session.*")
         return
       end
 
@@ -311,20 +279,16 @@ module Crimson
       lines = entries.map do |e|
         case e.role
         when "user"
-          preview = truncate(e.content.to_s, 60)
-          "- **#{preview}**"
+          "- **#{truncate(e.content.to_s, 60)}**"
         when "assistant"
           tool_str = e.tool_calls.any? ? " [#{e.tool_calls.map { |t| t["name"] }.join(", ")}]" : ""
-          preview = truncate(e.content.to_s, 60)
-          "  - #{preview}#{tool_str}"
+          "  - #{truncate(e.content.to_s, 60)}#{tool_str}"
         when "tool_result"
-          preview = truncate(e.content.to_s, 40)
-          "    - #{e.tool_name}: #{preview}"
+          "    - #{e.tool_name}: #{truncate(e.content.to_s, 40)}"
         end
       end
 
-      @tui.append_markdown(lines.join("\n"))
-      @tui.request_render
+      @tui.add_message(:assistant, lines.join("\n"))
     end
 
     def truncate(text, max_len)
@@ -336,11 +300,10 @@ module Crimson
     def handle_compact
       if @agent.compactor
         result = @agent.compact!
-        @tui.append_markdown("*#{result}*")
+        @tui.add_message(:assistant, "*#{result}*")
       else
-        @tui.append_markdown("*Compaction not enabled.*")
+        @tui.add_message(:assistant, "*Compaction not enabled.*")
       end
-      @tui.request_render
     end
 
     def setup_readline
