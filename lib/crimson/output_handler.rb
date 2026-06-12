@@ -35,31 +35,25 @@ module Crimson
 
       agent.on(Agent::Events::TOOL_EXECUTION_START) do |_event, tool_name:, args:, **|
         @status_bar&.show_tool(tool_name)
-        ensure_scroll_cursor
         path = extract_path(args)
-        if path
-          puts @pastel.bold.cyan("  #{tool_name}(#{path})")
-        else
-          puts @pastel.bold.cyan("  #{tool_name}")
-        end
+        line = path ? "  #{tool_name}(#{path})" : "  #{tool_name}"
+        @status_bar&.write(@pastel.bold.cyan(line))
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_END) do |_event, result:, is_error:, **|
         @status_bar&.hide_tool
-        ensure_scroll_cursor
         truncated = truncate(result.to_s, 200)
         if is_error
-          puts @pastel.red("  -> #{truncated}")
+          @status_bar&.write(@pastel.red("  -> #{truncated}"))
         else
-          puts @pastel.dim("  -> #{truncated}")
+          @status_bar&.write(@pastel.dim("  -> #{truncated}"))
         end
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_UPDATE) do |_event, tool_name:, partial_result:, **|
         next unless tool_name == "run_command"
         flush_render_buffer
-        $stdout.write("\r #{@pastel.dim(partial_result)}")
-        $stdout.flush
+        @status_bar&.write(@pastel.dim(partial_result.to_s[0..120]))
       end
 
       agent.on(Agent::Events::TURN_START) do
@@ -85,10 +79,6 @@ module Crimson
 
     private
 
-    def ensure_scroll_cursor
-      @status_bar&.move_to_input
-    end
-
     def start_render_thread
       @render_thread = Thread.new do
         loop do
@@ -105,9 +95,7 @@ module Crimson
         @render_buffer.clear
       end
       return :empty if data.nil? || data.empty?
-      ensure_scroll_cursor
-      $stdout.write(data)
-      $stdout.flush
+      @status_bar&.write_raw(data)
       nil
     end
 

@@ -17,6 +17,7 @@ module Crimson
       @tool_name = nil
       @spinner_idx = 0
       @mutex = Mutex.new
+      @io_mutex = Mutex.new
       @stopped = false
       @input_row = 0
       @scroll_bottom = 0
@@ -68,8 +69,11 @@ module Crimson
     end
 
     def write(text)
-      $stdout.write(text)
-      $stdout.flush
+      @io_mutex.synchronize do
+        $stdout.write("\e[#{@input_row + 1};1H")
+        $stdout.write(text)
+        $stdout.flush
+      end
     end
 
     def write_ln(text)
@@ -80,9 +84,19 @@ module Crimson
       $stdout.flush
     end
 
+    def write_raw(data)
+      @io_mutex.synchronize do
+        $stdout.write("\e[#{@input_row + 1};1H")
+        $stdout.write(data)
+        $stdout.flush
+      end
+    end
+
     def move_to_input
-      $stdout.write("\e[#{@input_row + 1};1H")
-      $stdout.flush
+      @io_mutex.synchronize do
+        $stdout.write("\e[#{@input_row + 1};1H")
+        $stdout.flush
+      end
     end
 
     def handle_resize
@@ -95,23 +109,29 @@ module Crimson
     private
 
     def enter_alternate_screen
-      $stdout.write("\e[?1049h")
-      $stdout.flush
+      @io_mutex.synchronize do
+        $stdout.write("\e[?1049h")
+        $stdout.flush
+      end
     end
 
     def leave_alternate_screen
-      $stdout.write("\e[r")
-      $stdout.write("\e[?25h")
-      $stdout.write("\e[?1049l")
-      $stdout.flush
+      @io_mutex.synchronize do
+        $stdout.write("\e[r")
+        $stdout.write("\e[?25h")
+        $stdout.write("\e[?1049l")
+        $stdout.flush
+      end
     end
 
     def setup_scroll_region
       rows, = term_size
       @scroll_bottom = rows - @bar_height
       @input_row = @scroll_bottom - 1
-      $stdout.write("\e[1;#{@scroll_bottom}r")
-      $stdout.flush
+      @io_mutex.synchronize do
+        $stdout.write("\e[1;#{@scroll_bottom}r")
+        $stdout.flush
+      end
     end
 
     def draw
@@ -119,20 +139,24 @@ module Crimson
         bar_start = @scroll_bottom
         width = term_size[1]
 
-        # Draw status bar at bottom rows (outside scroll region)
-        $stdout.write("\e[#{bar_start + 1};1H")
-        $stdout.write("\e[2K")
-        $stdout.write(@pastel.dim("─" * width))
+        status_line = draw_status_line
+        info_line = draw_info_line
 
-        $stdout.write("\e[#{bar_start + 2};1H")
-        $stdout.write("\e[2K")
-        $stdout.write(draw_status_line)
+        @io_mutex.synchronize do
+          $stdout.write("\e[#{bar_start + 1};1H")
+          $stdout.write("\e[2K")
+          $stdout.write(@pastel.dim("─" * width))
 
-        $stdout.write("\e[#{bar_start + 3};1H")
-        $stdout.write("\e[2K")
-        $stdout.write(draw_info_line)
+          $stdout.write("\e[#{bar_start + 2};1H")
+          $stdout.write("\e[2K")
+          $stdout.write(status_line)
 
-        $stdout.flush
+          $stdout.write("\e[#{bar_start + 3};1H")
+          $stdout.write("\e[2K")
+          $stdout.write(info_line)
+
+          $stdout.flush
+        end
       end
     end
 
