@@ -7,40 +7,45 @@ module Crimson
   class OutputHandler
     def initialize
       @pastel = Pastel.new
-      @tui = Tui.new
+      @tui = nil
       @first_token = false
     end
 
-    def attach(agent)
+    def attach(agent, tui)
+      @tui = tui
+
       agent.on(Agent::Events::AGENT_START) do
         @first_token = false
         @tui.show_loading("Thinking...")
-        update_status_from_agent(agent, status: "thinking")
+        update_status(agent, status: :thinking)
       end
 
       agent.on(Agent::Events::MESSAGE_UPDATE) do |_event, delta:, **|
         unless @first_token
           @tui.hide_loading
           @first_token = true
-          @tui.add_message(:assistant, delta)
-        else
-          @tui.append_to_last_message(delta)
         end
-        update_status_from_agent(agent, status: "streaming")
+        @tui.insert_content(delta)
+        update_status(agent, status: :streaming)
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_START) do |_event, tool_name:, args:, **|
         @tui.hide_loading
-        @tui.add_tool_call(tool_name, args)
-        update_status_from_agent(agent, status: "tool_running")
+        path = extract_path(args)
+        line = path ? "  #{tool_name}(#{path})" : "  #{tool_name}"
+        @tui.insert_content(line)
+        update_status(agent, status: :tool_running)
       end
 
-      agent.on(Agent::Events::TOOL_EXECUTION_END) do |_event, tool_name:, result:, is_error:, **|
-        @tui.complete_tool_call(tool_name, result, is_error: is_error)
+      agent.on(Agent::Events::TOOL_EXECUTION_END) do |_event, result:, is_error:, **|
+        truncated = truncate(result.to_s, 200)
+        prefix = is_error ? "  -> " : "  -> "
+        @tui.insert_content("#{prefix}#{truncated}")
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_UPDATE) do |_event, tool_name:, partial_result:, **|
-        # Could add partial result display here
+        next unless tool_name == "run_command"
+        @tui.insert_content(partial_result.to_s[0..120])
       end
 
       agent.on(Agent::Events::TURN_START) do
@@ -49,43 +54,44 @@ module Crimson
 
       agent.on(Agent::Events::AGENT_END) do
         @tui.hide_loading
-        update_status_from_agent(agent, status: "idle")
+        usage = agent.token_usage
+        if usage[:total] > 0
+          cost = agent.cost_tracker.total_cost
+          cost_str = cost > 0 ? " ($#{format("%.4f", cost)})" : ""
+          model = agent.config.model rescue ""
+          model_str = model.empty? ? "" : " #{model}"
+          @tui.insert_content("\n  tokens: #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}#{cost_str}#{model_str}")
+        end
+        update_status(agent, status: :idle)
       end
-    end
-
-    def start
-      @tui.start
-    end
-
-    def stop
-      @tui.stop
-    end
-
-    def tui
-      @tui
     end
 
     private
 
-    def update_status_from_agent(agent, status:)
+    def update_status(agent, status:)
       token_usage = agent.token_usage rescue { prompt: 0, completion: 0, total: 0 }
       cost = agent.cost_tracker.total_cost rescue 0.0
-      provider = agent.config.provider rescue ""
       model = agent.config.model rescue ""
-      session_name = agent.session_name rescue ""
-      cwd = Dir.pwd
-      thinking_level = agent.config.thinking_level rescue ""
 
       @tui.update_status(
         model: model,
-        provider: provider,
         tokens: token_usage,
         cost: cost,
-        status: status,
-        session_name: session_name,
-        cwd: cwd,
-        thinking_level: thinking_level
+        status: status
       )
+    end
+
+    def extract_path(args)
+      return nil unless args.is_a?(Hash)
+      args["path"] || args[:path]
+    rescue
+      nil
+    end
+
+    def truncate(text, max_len)
+      return "" if text.nil?
+      cleaned = text.gsub("\n", "\\n")
+      cleaned.length > max_len ? "#{cleaned[0...max_len]}..." : cleaned
     end
   end
 end
