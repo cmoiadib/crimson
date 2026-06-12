@@ -19,7 +19,7 @@ module Crimson
       puts
 
       loop do
-        input = Reline.readline("> ", true)
+        input = Reline.readline(build_prompt, true)
 
         break if input.nil?
         input = input.strip
@@ -263,6 +263,20 @@ module Crimson
 
     def setup_readline
       Reline.completion_proc = method(:file_path_completion)
+    end
+
+    def build_prompt
+      usage = @agent.token_usage rescue { prompt: 0, completion: 0, total: 0 }
+      cost = @agent.cost_tracker.total_cost rescue 0.0
+      model = @agent.config.model rescue ""
+
+      if usage[:total] > 0
+        cost_str = cost > 0 ? " ($#{format('%.4f', cost)})" : ""
+        model_str = model.empty? ? "" : " #{model}"
+        "#{@pastel.dim("  #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}#{cost_str}#{model_str}")}\n> "
+      else
+        "> "
+      end
     end
 
     def file_path_completion(input)

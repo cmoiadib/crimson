@@ -62,12 +62,6 @@ module Crimson
       agent.on(Agent::Events::AGENT_END) do
         stop_spinner
         flush_render_buffer
-        usage = agent.token_usage
-        if usage[:total] > 0
-          cost = agent.cost_tracker.total_cost
-          cost_str = cost > 0 ? " ($#{format("%.4f", cost)})" : ""
-          puts @pastel.dim("\n  tokens: #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}#{cost_str}")
-        end
       end
     end
 
