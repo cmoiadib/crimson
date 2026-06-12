@@ -41,6 +41,7 @@ module Crimson
 
     attr_reader :tool_registry, :token_usage, :events, :steering
     attr_reader :session_id, :session_cwd, :cost_tracker, :compactor
+    attr_accessor :config
     attr_writer :define_system_prompt
 
     def initialize(client:, tool_registry:, system_prompt:)
@@ -48,6 +49,7 @@ module Crimson
       @tool_registry = tool_registry
       @system_prompt = system_prompt
       @system_prompt_builder = nil
+      @config = Crimson.config
       @history = []
       @events = Agent::EventEmitter.new
       @steering = Agent::SteeringManager.new
@@ -135,6 +137,20 @@ module Crimson
     def abort!
       @abort_signal.abort!
       @abort_controller = true
+    end
+
+    def switch_model(model_id)
+      @config = Config.new(
+        provider: @config.provider,
+        model: model_id,
+        api_key: @config.api_key,
+        base_url: @config.base_url,
+        max_tokens: @config.max_tokens,
+        thinking_level: @config.thinking_level
+      )
+      @client = Crimson::Client.create(@config)
+      @cached_tool_defs = nil
+      @cached_system_msg = nil
     end
 
     def reset
@@ -333,7 +349,26 @@ module Crimson
     def append_to_session(message)
       return unless @session_manager && @session_id
 
-      entry = SessionEntry.from_message(message, parent_id: @last_entry_id)
+      read_files = []
+      modified_files = []
+
+      if message.is_a?(Message::ToolResult)
+        tool_name = message.name
+        args = find_tool_call_args(tool_name, message.tool_call_id)
+        if args
+          path = args["path"] || args[:path]
+          case tool_name
+          when "read_file"
+            read_files = [path].compact
+          when "write_file", "edit_file"
+            modified_files = [path].compact
+          end
+        end
+      end
+
+      entry = SessionEntry.from_message(message, parent_id: @last_entry_id,
+                                       read_files: read_files,
+                                       modified_files: modified_files)
       if message.is_a?(Message::Assistant) && @token_usage[:total] > 0
         entry.token_usage = {
           "prompt" => @token_usage[:prompt],
@@ -345,6 +380,15 @@ module Crimson
       @session_buffer << entry
 
       flush_session_buffer if @session_buffer.length >= 3
+    end
+
+    def find_tool_call_args(tool_name, tool_call_id)
+      @history.reverse_each do |msg|
+        next unless msg.is_a?(Message::Assistant) && msg.tool_calls
+        tc = msg.tool_calls.find { |t| t.id == tool_call_id }
+        return tc.arguments if tc
+      end
+      nil
     end
 
     def flush_session_buffer

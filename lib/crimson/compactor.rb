@@ -21,7 +21,8 @@ module Crimson
       older = history[0...-KEEP_RECENT_MESSAGES]
       recent = history[-KEEP_RECENT_MESSAGES..]
 
-      summary = summarize(older, system_prompt)
+      file_ops = extract_file_operations(history)
+      summary = summarize(older, system_prompt, file_ops)
 
       compacted = []
       compacted << Message::User.new("[Previous conversation summary]\n#{summary}")
@@ -32,11 +33,46 @@ module Crimson
 
     private
 
-    def summarize(messages, system_prompt)
+    def extract_file_operations(history)
+      ops = { read: [], modified: [] }
+      pending_tool_calls = {}
+
+      history.each do |msg|
+        if msg.is_a?(Message::Assistant) && msg.tool_calls
+          msg.tool_calls.each do |tc|
+            pending_tool_calls[tc.id] = tc
+          end
+        elsif msg.is_a?(Message::ToolResult)
+          tc = pending_tool_calls[msg.tool_call_id]
+          if tc
+            path = tc.arguments.is_a?(Hash) ? (tc.arguments["path"] || tc.arguments[:path]) : nil
+            case tc.name
+            when "read_file"
+              ops[:read] << path if path
+            when "write_file", "edit_file"
+              ops[:modified] << path if path
+            end
+          end
+        end
+      end
+
+      ops[:read] = ops[:read].compact.uniq
+      ops[:modified] = ops[:modified].compact.uniq
+      ops
+    end
+
+    def summarize(messages, system_prompt, file_ops = { read: [], modified: [] })
+      files_section = ""
+      if file_ops[:read].any? || file_ops[:modified].any?
+        files_section = "\n\nFiles involved in this conversation:\n"
+        files_section += "  Read: #{file_ops[:read].join(', ')}\n" if file_ops[:read].any?
+        files_section += "  Modified: #{file_ops[:modified].join(', ')}\n" if file_ops[:modified].any?
+      end
+
       summary_prompt = "Summarize the following conversation between a user and an AI coding assistant. " \
         "Preserve all important details: file paths discussed, code changes made, errors encountered, " \
         "decisions reached, and any unresolved issues. Be concise but complete.\n\n" \
-        "Conversation:\n#{format_messages(messages)}"
+        "Conversation:\n#{format_messages(messages)}#{files_section}"
 
       msgs = [
         Message::System.new("You are a helpful assistant that summarizes conversations concisely."),

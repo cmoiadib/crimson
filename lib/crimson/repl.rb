@@ -44,25 +44,28 @@ module Crimson
       case input
       when "/help"
         puts @pastel.bold("Commands:")
-        puts "  /help     Show help message"
-        puts "  /clear    Clear conversation history"
-        puts "  /model    Show current model"
-        puts "  /tools    List available tools"
-        puts "  /save     Save conversation to file"
-        puts "  /load     Load conversation from file"
-        puts "  /usage    Show token usage"
-        puts "  /sessions List sessions for current directory"
-        puts "  /fork     Fork current session into new branch"
-        puts "  /tree     Show conversation tree"
-        puts "  /compact  Compact conversation history"
-        puts "  /exit     Exit crimson"
+        puts "  /help       Show help message"
+        puts "  /clear      Clear conversation history"
+        puts "  /model      Switch model (interactive selector)"
+        puts "  /thinking   Set thinking level (off/low/medium/high)"
+        puts "  /tools      List available tools"
+        puts "  /save       Save conversation to file"
+        puts "  /load       Load conversation from file"
+        puts "  /usage      Show token usage and cost"
+        puts "  /sessions   List sessions for current directory"
+        puts "  /name       Set session name"
+        puts "  /session    Show session info"
+        puts "  /fork       Fork current session into new branch"
+        puts "  /tree       Show conversation tree"
+        puts "  /compact    Compact conversation history"
+        puts "  /exit       Exit crimson"
       when "/clear"
         @agent.reset
         puts @pastel.dim("Conversation cleared.")
       when "/model"
-        config = Crimson.config
-        puts "Provider: #{PROVIDERS[config.provider.to_sym][:name]}"
-        puts "Model: #{config.model}"
+        handle_model_switch
+      when "/thinking"
+        handle_thinking
       when "/tools"
         puts @pastel.bold("Available tools:")
         @agent.tool_registry.tool_names.each do |name|
@@ -74,12 +77,18 @@ module Crimson
         puts @agent.load_history
       when "/usage"
         usage = @agent.token_usage
+        cost = @agent.cost_tracker.total_cost
         puts @pastel.bold("Token usage:")
         puts "  Prompt:     #{usage[:prompt]}"
         puts "  Completion: #{usage[:completion]}"
         puts "  Total:      #{usage[:total]}"
+        puts "  Cost:       $#{format('%.4f', cost)}" if cost > 0
       when "/sessions"
         handle_sessions
+      when "/name"
+        handle_name
+      when "/session"
+        handle_session_info
       when "/fork"
         handle_fork
       when "/tree"
@@ -92,7 +101,11 @@ module Crimson
           puts @pastel.yellow("Compaction not enabled.")
         end
       else
-        puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
+        if input.start_with?("/name ")
+          handle_name_set(input[6..].strip)
+        else
+          puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
+        end
       end
     end
 
@@ -107,10 +120,108 @@ module Crimson
         puts @pastel.bold("Sessions:")
         sessions.each do |s|
           current = s.id == @agent.session_id ? " (current)" : ""
+          name_str = s.name ? "[#{s.name}] " : ""
           preview = s.preview || "(no preview)"
-          puts "  #{@pastel.cyan(s.id[0..7])} #{preview} #{s.last_timestamp}#{current}"
+          puts "  #{@pastel.cyan(s.id[0..7])} #{name_str}#{preview} #{s.last_timestamp}#{current}"
         end
       end
+    end
+
+    def handle_model_switch
+      config = @agent.config || Crimson.config
+      puts @pastel.dim("Current: #{PROVIDERS[config.provider.to_sym][:name]} / #{config.model}")
+      puts
+
+      begin
+        prompt = TTY::Prompt.new
+        models = fetch_available_models(config)
+        if models.empty?
+          puts @pastel.yellow("Could not fetch model list. Showing current model only.")
+          return
+        end
+
+        selected = prompt.select("Select model:", models.map { |m| { name: m, value: m } })
+        @agent.switch_model(selected)
+        @agent.config.save
+        puts @pastel.dim("Switched to: #{selected}")
+      rescue => e
+        puts @pastel.red("Error switching model: #{e.message}")
+      end
+    end
+
+    def fetch_available_models(config)
+      require "net/http"
+      require "uri"
+      provider = PROVIDERS[config.provider.to_sym]
+      base_url = config.base_url || provider[:base_url]
+      url = URI("#{base_url}/models")
+
+      headers = provider[:auth_headers].call(config.api_key)
+      http = Net::HTTP.new(url.host, url.port)
+      http.use_ssl = url.scheme == "https"
+      http.open_timeout = 5
+      http.read_timeout = 10
+
+      request = Net::HTTP::Get.new(url.request_uri, headers)
+      response = http.request(request)
+
+      return [] unless response.is_a?(Net::HTTPSuccess)
+      data = JSON.parse(response.body)
+      (data["data"] || []).map { |m| m["id"] }.sort
+    rescue
+      []
+    end
+
+    def handle_thinking
+      config = @agent.config || Crimson.config
+      current = config.thinking_level || "off"
+      puts @pastel.dim("Current thinking level: #{current}")
+      puts
+
+      begin
+        prompt = TTY::Prompt.new
+        level = prompt.select("Thinking level:", %w[off low medium high].map { |l| { name: l, value: l } })
+        config.thinking_level = level
+        config.save
+        @agent.config = config
+        puts @pastel.dim("Thinking level set to: #{level}")
+      rescue => e
+        puts @pastel.red("Error setting thinking level: #{e.message}")
+      end
+    end
+
+    def handle_name
+      return puts(@pastel.yellow("No active session.")) unless @agent.session_id
+      puts @pastel.dim("Usage: /name <session name>")
+    end
+
+    def handle_name_set(name)
+      return puts(@pastel.yellow("No active session.")) unless @agent.session_id
+      return puts(@pastel.yellow("Usage: /name <session name>")) if name.empty?
+
+      manager = SessionManager.new
+      manager.set_name(@agent.session_id, cwd: Dir.pwd, name: name)
+      puts @pastel.dim("Session name set to: #{name}")
+    end
+
+    def handle_session_info
+      return puts(@pastel.dim("No active session.")) unless @agent.session_id
+
+      manager = SessionManager.new
+      header = manager.load_header(@agent.session_id, cwd: Dir.pwd)
+      entries = manager.load(@agent.session_id, cwd: Dir.pwd)
+
+      puts @pastel.bold("Session info:")
+      puts "  ID:       #{@agent.session_id}"
+      puts "  Name:     #{header&.dig('name') || '(unnamed)'}" if header
+      puts "  Created:  #{header&.dig('timestamp')}" if header
+      puts "  CWD:      #{@agent.session_cwd}"
+      puts "  Entries:  #{entries.length}"
+
+      usage = @agent.token_usage
+      puts "  Tokens:   #{usage[:total]} (#{usage[:prompt]} prompt + #{usage[:completion]} completion)"
+      cost = @agent.cost_tracker.total_cost
+      puts "  Cost:     $#{format('%.4f', cost)}" if cost > 0
     end
 
     def handle_fork
