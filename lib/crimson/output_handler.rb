@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "pastel"
-require_relative "tui_manager"
 
 module Crimson
   class OutputHandler
@@ -15,17 +14,12 @@ module Crimson
       @render_thread = nil
       @render_mutex = Mutex.new
       @spinner_thread = nil
-      @tui = nil
     end
 
     def attach(agent)
-      @tui = TuiManager.new(agent)
-      @tui.start
-
       agent.on(Agent::Events::AGENT_START) do
         @first_token = false
         start_spinner
-        @tui.update_status_bar(status: "thinking")
       end
 
       agent.on(Agent::Events::MESSAGE_UPDATE) do |_event, delta:, **|
@@ -33,24 +27,32 @@ module Crimson
         @first_token = true
         @render_mutex.synchronize { @render_buffer << delta }
         start_render_thread unless @render_thread&.alive?
-        @tui.update_status_bar(status: "streaming")
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_START) do |_event, tool_name:, args:, **|
         stop_spinner
-        flush_render_buffer
-        @tui.add_tool_call(tool_name, args)
-        @tui.render_now
-        @tui.update_status_bar(status: "tool_running")
+        path = extract_path(args)
+        if path
+          puts @pastel.bold.cyan("  #{tool_name}(#{path})")
+        else
+          puts @pastel.bold.cyan("  #{tool_name}")
+        end
       end
 
-      agent.on(Agent::Events::TOOL_EXECUTION_END) do |_event, tool_name:, result:, is_error:, **|
-        @tui.complete_tool_call(tool_name, result, error: is_error)
-        @tui.render_now
+      agent.on(Agent::Events::TOOL_EXECUTION_END) do |_event, result:, is_error:, **|
+        truncated = truncate(result.to_s, 200)
+        if is_error
+          puts @pastel.red("  -> #{truncated}")
+        else
+          puts @pastel.dim("  -> #{truncated}")
+        end
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_UPDATE) do |_event, tool_name:, partial_result:, **|
-        # Live updates during tool execution
+        next unless tool_name == "run_command"
+        flush_render_buffer
+        $stdout.write("\r #{@pastel.dim(partial_result)}")
+        $stdout.flush
       end
 
       agent.on(Agent::Events::TURN_START) do
@@ -60,13 +62,13 @@ module Crimson
       agent.on(Agent::Events::AGENT_END) do
         stop_spinner
         flush_render_buffer
-        @tui.update_status_bar(status: "idle")
-        @tui.render_now
+        usage = agent.token_usage
+        if usage[:total] > 0
+          cost = agent.cost_tracker.total_cost
+          cost_str = cost > 0 ? " ($#{format("%.4f", cost)})" : ""
+          puts @pastel.dim("\n  tokens: #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}#{cost_str}")
+        end
       end
-    end
-
-    def stop
-      @tui&.stop
     end
 
     private
@@ -116,6 +118,19 @@ module Crimson
       $stdout.write(data)
       $stdout.flush
       nil
+    end
+
+    def extract_path(args)
+      return nil unless args.is_a?(Hash)
+      args["path"] || args[:path]
+    rescue => e
+      nil
+    end
+
+    def truncate(text, max_len)
+      return "" if text.nil?
+      cleaned = text.gsub("\n", "\\n")
+      cleaned.length > max_len ? "#{cleaned[0...max_len]}..." : cleaned
     end
   end
 end
