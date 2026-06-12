@@ -8,6 +8,9 @@ module Crimson
       RESET = "\e[0m"
       SEGMENT_RESET = "\e[0m"
 
+      attr_reader :container
+      attr_accessor :stopped
+
       def initialize(terminal)
         @terminal = terminal
         @container = Container.new
@@ -20,10 +23,6 @@ module Crimson
         @previous_viewport_top = 0
         @stopped = false
         @render_mutex = Mutex.new
-      end
-
-      def container
-        @container
       end
 
       def start
