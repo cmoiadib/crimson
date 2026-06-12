@@ -91,8 +91,8 @@ module Crimson
       agent.on(Agent::Events::TURN_START) do |_event, active_skills: []|
         conditional = active_skills.reject { |s| s == "coding" }
         unless conditional.empty?
-          $stdout.write("\r\e[2K")
-          puts @pastel.dim("  + #{conditional.join(", ")}")
+          stop_spinner
+          puts @pastel.dim("+ #{conditional.join(", ")}")
         end
         unless @first_token
           @thinking_start = Time.now
