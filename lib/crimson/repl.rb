@@ -14,8 +14,6 @@ module Crimson
     end
 
     def start
-      @output_handler.start
-
       puts @pastel.bold("Crimson v#{VERSION}")
       puts @pastel.dim("Type /help for commands, /exit to quit")
       puts
@@ -33,13 +31,10 @@ module Crimson
         else
           @agent.prompt(input)
         end
-      rescue Interrupt
-        puts "\n" + @pastel.yellow("Operation cancelled by user.")
       rescue => e
         puts @pastel.red("Error: #{e.message}")
       end
 
-      @output_handler.stop
       puts @pastel.dim("Goodbye!")
     end
 
@@ -48,7 +43,22 @@ module Crimson
     def handle_command(input)
       case input
       when "/help"
-        show_help
+        puts @pastel.bold("Commands:")
+        puts "  /help       Show help message"
+        puts "  /clear      Clear conversation history"
+        puts "  /model      Switch model (interactive selector)"
+        puts "  /thinking   Set thinking level (off/low/medium/high)"
+        puts "  /tools      List available tools"
+        puts "  /save       Save conversation to file"
+        puts "  /load       Load conversation from file"
+        puts "  /usage      Show token usage and cost"
+        puts "  /sessions   List sessions for current directory"
+        puts "  /name       Set session name"
+        puts "  /session    Show session info"
+        puts "  /fork       Fork current session into new branch"
+        puts "  /tree       Show conversation tree"
+        puts "  /compact    Compact conversation history"
+        puts "  /exit       Exit crimson"
       when "/clear"
         @agent.reset
         puts @pastel.dim("Conversation cleared.")
@@ -57,13 +67,22 @@ module Crimson
       when "/thinking"
         handle_thinking
       when "/tools"
-        show_tools
+        puts @pastel.bold("Available tools:")
+        @agent.tool_registry.tool_names.each do |name|
+          puts "  - #{name}"
+        end
       when "/save"
         puts @agent.save_history
       when "/load"
         puts @agent.load_history
       when "/usage"
-        show_usage
+        usage = @agent.token_usage
+        cost = @agent.cost_tracker.total_cost
+        puts @pastel.bold("Token usage:")
+        puts "  Prompt:     #{usage[:prompt]}"
+        puts "  Completion: #{usage[:completion]}"
+        puts "  Total:      #{usage[:total]}"
+        puts "  Cost:       $#{format('%.4f', cost)}" if cost > 0
       when "/sessions"
         handle_sessions
       when "/name"
@@ -75,7 +94,12 @@ module Crimson
       when "/tree"
         handle_tree
       when "/compact"
-        handle_compact
+        if @agent.compactor
+          result = @agent.compact!
+          puts @pastel.dim(result)
+        else
+          puts @pastel.yellow("Compaction not enabled.")
+        end
       else
         if input.start_with?("/name ")
           handle_name_set(input[6..].strip)
@@ -83,42 +107,6 @@ module Crimson
           puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
         end
       end
-    end
-
-    def show_help
-      puts @pastel.bold("Commands:")
-      puts "  /help       Show help message"
-      puts "  /clear      Clear conversation history"
-      puts "  /model      Switch model (interactive selector)"
-      puts "  /thinking   Set thinking level (off/low/medium/high)"
-      puts "  /tools      List available tools"
-      puts "  /save       Save conversation to file"
-      puts "  /load       Load conversation from file"
-      puts "  /usage      Show token usage and cost"
-      puts "  /sessions   List sessions for current directory"
-      puts "  /name       Set session name"
-      puts "  /session    Show session info"
-      puts "  /fork       Fork current session into new branch"
-      puts "  /tree       Show conversation tree"
-      puts "  /compact    Compact conversation history"
-      puts "  /exit       Exit crimson"
-    end
-
-    def show_tools
-      puts @pastel.bold("Available tools:")
-      @agent.tool_registry.tool_names.each do |name|
-        puts "  - #{name}"
-      end
-    end
-
-    def show_usage
-      usage = @agent.token_usage
-      cost = @agent.cost_tracker.total_cost
-      puts @pastel.bold("Token usage:")
-      puts "  Prompt:     #{usage[:prompt]}"
-      puts "  Completion: #{usage[:completion]}"
-      puts "  Total:      #{usage[:total]}"
-      puts "  Cost:       $#{format('%.4f', cost)}" if cost > 0
     end
 
     def handle_sessions
@@ -271,15 +259,6 @@ module Crimson
       return "" if text.nil?
       cleaned = text.gsub("\n", "\\n")
       cleaned.length > max_len ? "#{cleaned[0...max_len]}..." : cleaned
-    end
-
-    def handle_compact
-      if @agent.compactor
-        result = @agent.compact!
-        puts @pastel.dim(result)
-      else
-        puts @pastel.yellow("Compaction not enabled.")
-      end
     end
 
     def setup_readline
