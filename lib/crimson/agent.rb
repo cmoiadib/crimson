@@ -209,10 +209,6 @@ module Crimson
         break if iterations > MAX_ITERATIONS
         break if @abort_controller
 
-        @events.emit(Agent::Events::TURN_START)
-
-        maybe_compact
-
         last_user_msg = @history.last&.content.to_s
         tools_invoked = last_invoked_tool_names
         new_skills = @skill_router.resolve(last_user_msg, tools_invoked: tools_invoked)
@@ -220,6 +216,10 @@ module Crimson
           @active_skills = new_skills
           @cached_system_msg = nil
         end
+
+        @events.emit(Agent::Events::TURN_START, active_skills: @active_skills)
+
+        maybe_compact
 
         messages = build_messages
         tools = tools_for_message(last_user_msg)
