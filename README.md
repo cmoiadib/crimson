@@ -6,10 +6,16 @@ An open-source Ruby-based minimal coding agent made to get things done.
 
 - **Multi-provider support** — OpenAI, Anthropic, OpenRouter, Mistral, xAI, and custom OpenAI-compatible endpoints
 - **Official SDKs** — Uses the official OpenAI and Anthropic Ruby gems
-- **Built-in tools** — Read, write, list files, run commands, and search code
-- **Streaming** — Real-time response output as the model generates
+- **Built-in tools** — Read, write, edit, list files, run commands, search code, and glob
+- **Streaming output** — Real-time response with styled markdown rendering (headers, bold, italic, code, lists, links, blockquotes)
+- **Colored tool display** — `→Read`, `→Write`, `→Edit`, `$ command`, `✱Search`, `✱Glob`, `→List` with per-tool colors
+- **Thinking indicator** — Spinner while thinking, with `+ Thought: X.Xs` timing on first token
+- **Run stats** — Token usage, cost, and elapsed time shown at end of every run
 - **Skills system** — Customize agent behavior with markdown files
-- **Interactive REPL** — Conversational coding assistant in your terminal
+- **Session management** — Save, load, fork, and name conversation sessions per directory
+- **Conversation compaction** — Automatic and manual compaction to stay within context limits
+- **Cost tracking** — Real-time token usage and cost tracking per run
+- **Interactive REPL** — Conversational coding assistant with tab-completion and slash commands
 
 ## Requirements
 
@@ -45,8 +51,18 @@ ruby bin/crimson
 |---------|-------------|
 | `/help` | Show available commands |
 | `/clear` | Clear conversation history |
-| `/model` | Show current model |
+| `/model` | Switch model (interactive selector) |
+| `/thinking` | Set thinking level (off/low/medium/high) |
 | `/tools` | List available tools |
+| `/save` | Save conversation to file |
+| `/load` | Load conversation from file |
+| `/usage` | Show token usage and cost |
+| `/sessions` | List sessions for current directory |
+| `/name` | Set session name |
+| `/session` | Show session info |
+| `/fork` | Fork current session into new branch |
+| `/tree` | Show conversation tree |
+| `/compact` | Compact conversation history |
 | `/exit` | Exit crimson |
 
 ### Skills
