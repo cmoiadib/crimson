@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Crimson
   MODEL_PRICING = {
     "gpt-4o" => { input: 2.50, output: 10.00 },

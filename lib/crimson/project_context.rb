@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Crimson
   class ProjectContext
     def self.detect(root_dir = Dir.pwd)

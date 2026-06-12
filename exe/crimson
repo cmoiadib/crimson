@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
 
 require "crimson"
 
@@ -36,34 +37,34 @@ module Crimson
       end
     end
 
-  def self.start_repl
-    unless Crimson.configured?
-      puts "Welcome to Crimson! Running initial setup..."
-      puts
-      Crimson::Setup.first_run
+    def self.start_repl
+      unless Crimson.configured?
+        puts "Welcome to Crimson! Running initial setup..."
+        puts
+        Crimson::Setup.first_run
+      end
+
+      client = Crimson::Client.create(Crimson.config)
+      registry = Crimson::ToolRegistry.new
+      Crimson::Tools::ALL.each { |tool| registry.register(tool) }
+
+      system_prompt = nil
+      agent = Crimson::Agent.new(
+        client: client,
+        tool_registry: registry,
+        system_prompt: nil
+      )
+
+      agent.define_system_prompt = -> {
+        system_prompt ||= build_system_prompt(registry)
+      }
+
+      handle_session_flags(agent)
+
+      agent.enable_compaction!(client: client)
+
+      Crimson::Repl.new(agent).start
     end
-
-    client = Crimson::Client.create(Crimson.config)
-    registry = Crimson::ToolRegistry.new
-    Crimson::Tools::ALL.each { |tool| registry.register(tool) }
-
-    system_prompt = nil
-    agent = Crimson::Agent.new(
-      client: client,
-      tool_registry: registry,
-      system_prompt: nil
-    )
-
-    agent.define_system_prompt = -> {
-      system_prompt ||= build_system_prompt(registry)
-    }
-
-    handle_session_flags(agent)
-
-    agent.enable_compaction!(client: client)
-
-    Crimson::Repl.new(agent).start
-  end
 
     def self.handle_session_flags(agent)
       args = ARGV.dup
@@ -128,121 +129,8 @@ module Crimson
         system_prompt: system_prompt
       )
 
-      attach_one_shot_handlers(agent)
+      Crimson::OutputHandler.new.attach(agent)
       agent.prompt(task)
-    end
-
-  def self.attach_one_shot_handlers(agent)
-    pastel = Pastel.new
-    spinner_active = false
-    spinner_thread = nil
-    first_token = false
-    render_buffer = String.new
-    render_mutex = Mutex.new
-    render_thread = nil
-
-    flush_buffer = -> {
-      data = nil
-      render_mutex.synchronize do
-        data = render_buffer.dup
-        render_buffer.clear
-      end
-      return if data.nil? || data.empty?
-      $stdout.write(data)
-      $stdout.flush
-    }
-
-    start_render = -> {
-      render_thread = Thread.new do
-        loop do
-          sleep 0.05
-          data = nil
-          render_mutex.synchronize do
-            data = render_buffer.dup
-            render_buffer.clear
-          end
-          break if data.nil? || data.empty?
-          $stdout.write(data)
-          $stdout.flush
-        end
-      end
-    }
-
-    start_spinner = -> {
-        next if spinner_active
-        spinner_active = true
-        first_token = false
-        spinner_thread = Thread.new do
-          frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-          i = 0
-          while spinner_active
-            $stdout.write("\r  \e[36m#{frames[i % frames.length]}\e[0m Thinking...")
-            $stdout.flush
-            i += 1
-            sleep 0.08
-          end
-          $stdout.write("\r\e[2K")
-          $stdout.flush
-        end
-      }
-
-      stop_spinner = -> {
-        next unless spinner_active
-        spinner_active = false
-        spinner_thread&.join(2)
-        spinner_thread = nil
-        $stdout.write("\r\e[2K")
-        $stdout.flush
-      }
-
-      agent.on(Agent::Events::AGENT_START) { start_spinner.call }
-
-    agent.on(Agent::Events::MESSAGE_UPDATE) do |_event, delta:, **|
-      unless first_token
-        stop_spinner.call
-        first_token = true
-      end
-      render_mutex.synchronize { render_buffer << delta }
-      start_render.call unless render_thread&.alive?
-    end
-
-      agent.on(Agent::Events::TOOL_EXECUTION_START) do |_event, tool_name:, args:, **|
-        stop_spinner.call
-        path = args.is_a?(Hash) ? (args["path"] || args[:path]) : nil
-        if path
-          puts pastel.bold.cyan("  #{tool_name}(#{path})")
-        else
-          puts pastel.bold.cyan("  #{tool_name}")
-        end
-      end
-
-      agent.on(Agent::Events::TOOL_EXECUTION_END) do |_event, result:, is_error:, **|
-        truncated = result.to_s.gsub("\n", "\\n")
-        truncated = "#{truncated[0...200]}..." if truncated.length > 200
-        if is_error
-          puts pastel.red("  -> #{truncated}")
-        else
-          puts pastel.dim("  -> #{truncated}")
-        end
-      end
-
-    agent.on(Agent::Events::TOOL_EXECUTION_UPDATE) do |_event, tool_name:, partial_result:, **|
-      next unless tool_name == "run_command"
-      flush_buffer.call
-      $stdout.write("\r #{pastel.dim(partial_result)}")
-      $stdout.flush
-    end
-
-    agent.on(Agent::Events::AGENT_END) do
-      stop_spinner.call
-      flush_buffer.call
-      usage = agent.token_usage
-        if usage[:total] > 0
-          cost = agent.cost_tracker.total_cost
-          cost_str = cost > 0 ? " ($#{format("%.4f", cost)})" : ""
-          puts pastel.dim("\n  tokens: #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}#{cost_str}")
-        end
-      end
     end
 
     def self.build_system_prompt(registry)

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require "json"
 require "securerandom"
 
@@ -6,16 +8,29 @@ module Crimson
     MAX_ITERATIONS = 50
     HISTORY_FILE = ".crimson_history"
 
-    attr_reader :tool_registry, :token_usage, :events, :steering, :session_id, :session_cwd, :cost_tracker, :compactor
-  attr_writer :define_system_prompt
+    NEEDS_TOOL_PATTERNS = %w[
+      read write edit create fix bug test run exec command search find
+      file files directory folder install update delete remove patch
+      config setup deploy build compile lint format check verify
+      gem npm pip cargo bundle make git docker ls cat touch mkdir rm mv cp
+      grep rg sed awk head tail wc diff code project src spec
+      explain why how where when who which refactor implement
+      list show look open
+    ].freeze
 
-  def initialize(client:, tool_registry:, system_prompt:)
-    @client = client
-    @tool_registry = tool_registry
-    @system_prompt = system_prompt
-    @system_prompt_builder = nil
-    @history = []
-    @events = Agent::EventEmitter.new
+    TRIVIAL_PATTERNS = %w[hi hello hey thanks thank ok yes no bye goodbye sure].freeze
+
+    attr_reader :tool_registry, :token_usage, :events, :steering
+    attr_reader :session_id, :session_cwd, :cost_tracker, :compactor
+    attr_writer :define_system_prompt
+
+    def initialize(client:, tool_registry:, system_prompt:)
+      @client = client
+      @tool_registry = tool_registry
+      @system_prompt = system_prompt
+      @system_prompt_builder = nil
+      @history = []
+      @events = Agent::EventEmitter.new
       @steering = Agent::SteeringManager.new
       @token_usage = { prompt: 0, completion: 0, total: 0 }
       @before_tool_call = nil
@@ -26,11 +41,9 @@ module Crimson
       @session_cwd = nil
       @last_entry_id = nil
       @session_buffer = []
-      @session_flush_thread = nil
       @compactor = nil
       @cost_tracker = CostTracker.new
       @cached_tool_defs = nil
-      @executor = nil
       @cached_system_msg = nil
     end
 
@@ -66,14 +79,13 @@ module Crimson
       @compactor = Compactor.new(client: client, max_context_tokens: max_context_tokens)
     end
 
-  def compact!
-    return "Compaction not enabled" unless @compactor
-    return "History too short to compact" if @history.length <= 5
+    def compact!
+      return "Compaction not enabled" unless @compactor
+      return "History too short to compact" if @history.length <= 5
 
-    resolved_prompt = @system_prompt || (@system_prompt_builder&.call if @system_prompt_builder) || ""
-    @history = @compactor.compact(@history, system_prompt: resolved_prompt)
-    "Compacted history to #{@history.length} messages"
-  end
+      @history = @compactor.compact(@history, system_prompt: resolved_system_prompt)
+      "Compacted history to #{@history.length} messages"
+    end
 
     def prompt(user_input)
       @history << Message::User.new(user_input)
@@ -114,10 +126,6 @@ module Crimson
       @history = new_history.dup
     end
 
-    def run(user_input)
-      prompt(user_input)
-    end
-
     def save_history
       data = {
         history: @history.map { |msg| serialize_message(msg) },
@@ -140,6 +148,10 @@ module Crimson
 
     private
 
+    def resolved_system_prompt
+      @system_prompt || @system_prompt_builder&.call || ""
+    end
+
     def run_loop
       @abort_controller = false
       @events.emit(Agent::Events::AGENT_START)
@@ -149,27 +161,20 @@ module Crimson
 
       loop do
         iterations += 1
-        if iterations > MAX_ITERATIONS
-          break
-        end
-
+        break if iterations > MAX_ITERATIONS
         break if @abort_controller
 
         @events.emit(Agent::Events::TURN_START)
 
-        if @compactor && @history.length > 10 && @compactor.needs_compaction?(@history)
-          resolved = @system_prompt || (@system_prompt_builder&.call if @system_prompt_builder) || ""
-          @history = @compactor.compact(@history, system_prompt: resolved)
-        end
+        maybe_compact
 
         messages = build_messages
         tools = tools_for_message(@history.last&.content.to_s)
 
         assistant_message, usage = RetryHandler.with_retry do
-          @client.chat(messages: messages, tools: tools) do |text_chunk, tool_event|
+          @client.chat(messages: messages, tools: tools) do |text_chunk, _tool_event|
             if text_chunk
-              @events.emit(Agent::Events::MESSAGE_UPDATE,
-                delta: text_chunk, content_index: 0)
+              @events.emit(Agent::Events::MESSAGE_UPDATE, delta: text_chunk, content_index: 0)
             end
           end
         end
@@ -185,65 +190,18 @@ module Crimson
         all_messages << assistant_message
 
         if assistant_message.tool_call?
-          executor = Agent::ToolExecutor.new(
-            @tool_registry, @events,
-            before_hook: @before_tool_call,
-            after_hook: @after_tool_call
-          )
-
-          results = executor.execute(assistant_message.tool_calls, @history)
-
-          tool_results = results.map do |r|
-            Message::ToolResult.new(
-              tool_call_id: r[:tool_call].id,
-              name: r[:tool_call].name,
-              content: r[:result]
-            )
-          end
-
-          tool_results.each do |tr|
-            @history << tr
-            append_to_session(tr)
-            all_messages << tr
-          end
-
-          @events.emit(Agent::Events::TURN_END,
-            message: assistant_message, tool_results: results)
-
-          if @abort_controller
-            break
-          end
-
-          if @steering.has_steering?
-            steering_msgs = @steering.pop_all_steering
-            steering_msgs.each do |msg|
-              @history << msg
-              all_messages << msg
-            end
-          end
+          execute_tools_and_continue(assistant_message, all_messages)
         else
-          @events.emit(Agent::Events::TURN_END,
-            message: assistant_message, tool_results: [])
-
-          if @abort_controller
-            break
-          end
+          @events.emit(Agent::Events::TURN_END, message: assistant_message, tool_results: [])
+          break if @abort_controller
 
           if @steering.has_steering?
-            steering_msgs = @steering.pop_all_steering
-            steering_msgs.each do |msg|
-              @history << msg
-              all_messages << msg
-            end
+            inject_steering_messages(all_messages)
             next
           end
 
           if @steering.has_follow_up?
-            follow_up_msgs = @steering.pop_all_follow_up
-            follow_up_msgs.each do |msg|
-              @history << msg
-              all_messages << msg
-            end
+            inject_follow_up_messages(all_messages)
             next
           end
 
@@ -255,13 +213,59 @@ module Crimson
       @events.emit(Agent::Events::AGENT_END, messages: all_messages)
     end
 
-  def build_messages
-    msgs = []
-    resolved_prompt = @system_prompt || (@system_prompt_builder&.call if @system_prompt_builder) || ""
-    msgs << @cached_system_msg ||= Message::System.new(resolved_prompt) unless resolved_prompt.empty?
-    msgs.concat(@history)
-    msgs
-  end
+    def maybe_compact
+      return unless @compactor && @history.length > 10 && @compactor.needs_compaction?(@history)
+
+      @history = @compactor.compact(@history, system_prompt: resolved_system_prompt)
+    end
+
+    def execute_tools_and_continue(assistant_message, all_messages)
+      executor = Agent::ToolExecutor.new(
+        @tool_registry, @events,
+        before_hook: @before_tool_call,
+        after_hook: @after_tool_call
+      )
+
+      results = executor.execute(assistant_message.tool_calls, @history)
+
+      results.each do |r|
+        tr = Message::ToolResult.new(
+          tool_call_id: r[:tool_call].id,
+          name: r[:tool_call].name,
+          content: r[:result]
+        )
+        @history << tr
+        append_to_session(tr)
+        all_messages << tr
+      end
+
+      @events.emit(Agent::Events::TURN_END, message: assistant_message, tool_results: results)
+      return if @abort_controller
+
+      inject_steering_messages(all_messages) if @steering.has_steering?
+    end
+
+    def inject_steering_messages(all_messages)
+      @steering.pop_all_steering.each do |msg|
+        @history << msg
+        all_messages << msg
+      end
+    end
+
+    def inject_follow_up_messages(all_messages)
+      @steering.pop_all_follow_up.each do |msg|
+        @history << msg
+        all_messages << msg
+      end
+    end
+
+    def build_messages
+      msgs = []
+      prompt = resolved_system_prompt
+      msgs << (@cached_system_msg ||= Message::System.new(prompt)) unless prompt.empty?
+      msgs.concat(@history)
+      msgs
+    end
 
     def provider_tool_definitions
       sdk = PROVIDERS[Crimson.config.provider.to_sym][:sdk]
@@ -278,6 +282,50 @@ module Crimson
       @token_usage[:completion] += (usage[:completion_tokens] || usage["completion_tokens"] || 0)
       @token_usage[:total] += (usage[:total_tokens] || usage["total_tokens"] || 0)
       @cost_tracker.track(Crimson.config.model, usage)
+    end
+
+    def tools_for_message(user_input)
+      return cached_tool_definitions if needs_tools?(user_input)
+      []
+    end
+
+    def cached_tool_definitions
+      @cached_tool_defs ||= provider_tool_definitions
+    end
+
+    def needs_tools?(input)
+      return true if @history.any? { |m| m.is_a?(Message::ToolResult) }
+
+      lower = input.downcase.strip
+      return false if TRIVIAL_PATTERNS.include?(lower) || lower.length < 5
+
+      NEEDS_TOOL_PATTERNS.any? { |keyword| lower.include?(keyword) }
+    end
+
+    def append_to_session(message)
+      return unless @session_manager && @session_id
+
+      entry = SessionEntry.from_message(message, parent_id: @last_entry_id)
+      if message.is_a?(Message::Assistant) && @token_usage[:total] > 0
+        entry.token_usage = {
+          "prompt" => @token_usage[:prompt],
+          "completion" => @token_usage[:completion],
+          "total" => @token_usage[:total]
+        }
+      end
+      @last_entry_id = entry.id
+      @session_buffer << entry
+
+      flush_session_buffer if @session_buffer.length >= 3
+    end
+
+    def flush_session_buffer
+      return if @session_buffer.empty?
+      return unless @session_manager && @session_id
+
+      entries = @session_buffer.dup
+      @session_buffer.clear
+      entries.each { |e| @session_manager.append(@session_id, cwd: @session_cwd, entry: e) }
     end
 
     def serialize_message(msg)
@@ -307,61 +355,6 @@ module Crimson
       when "tool_result"
         Message::ToolResult.new(tool_call_id: data[:tool_call_id], name: data[:name], content: data[:content])
       end
-    end
-
-    def append_to_session(message)
-      return unless @session_manager && @session_id
-
-      entry = SessionEntry.from_message(message, parent_id: @last_entry_id)
-      if message.is_a?(Message::Assistant) && @token_usage[:total] > 0
-        entry.token_usage = {
-          "prompt" => @token_usage[:prompt],
-          "completion" => @token_usage[:completion],
-          "total" => @token_usage[:total]
-        }
-      end
-      @last_entry_id = entry.id
-      @session_buffer << entry
-
-      flush_session_buffer if @session_buffer.length >= 3
-    end
-
-    def flush_session_buffer
-      return if @session_buffer.empty?
-      return unless @session_manager && @session_id
-
-      entries = @session_buffer.dup
-      @session_buffer.clear
-      entries.each { |e| @session_manager.append(@session_id, cwd: @session_cwd, entry: e) }
-    end
-
-    def cached_tool_definitions
-      @cached_tool_defs ||= provider_tool_definitions
-    end
-
-    def tools_for_message(user_input)
-      return cached_tool_definitions if needs_tools?(user_input)
-      []
-    end
-
-    NEEDS_TOOL_PATTERNS = %w[
-      read write edit create fix bug test run exec command search find
-      file files directory folder install update delete remove patch
-      config setup deploy build compile lint format check verify
-      gem npm pip cargo bundle make git docker ls cat touch mkdir rm mv cp
-      grep rg sed awk head tail wc diff code project src spec
-      what's whats list show look open
-    ]
-
-    TRIVIAL_PATTERNS = %w[hi hello hey thanks thank ok yes no bye goodbye sure]
-
-    def needs_tools?(input)
-      return true if @history.any? { |m| m.is_a?(Message::ToolResult) }
-
-      lower = input.downcase.strip
-      return false if TRIVIAL_PATTERNS.include?(lower) || lower.length < 5
-
-      NEEDS_TOOL_PATTERNS.any? { |keyword| lower.include?(keyword) }
     end
   end
 end

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Crimson
   module RetryHandler
     MAX_RETRIES = 3
