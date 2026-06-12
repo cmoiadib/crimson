@@ -6,6 +6,7 @@ PATH
       openai (~> 0.66)
       pastel (~> 0.8)
       reline (~> 0.6)
+      tiktoken_ruby (~> 0.0.5)
       tty-prompt (~> 0.23)
       tty-spinner (~> 0.9)
 
@@ -54,6 +55,7 @@ GEM
       rspec-support (~> 3.13.0)
     rspec-support (3.13.7)
     standardwebhooks (1.1.0)
+    tiktoken_ruby (0.0.16-arm64-darwin)
     tty-color (0.6.0)
     tty-cursor (0.7.1)
     tty-prompt (0.23.1)
@@ -70,7 +72,6 @@ GEM
 
 PLATFORMS
   arm64-darwin-24
-  ruby
 
 DEPENDENCIES
   crimson!
@@ -101,6 +102,7 @@ CHECKSUMS
   rspec-mocks (3.13.8) sha256=086ad3d3d17533f4237643de0b5c42f04b66348c28bf6b9c2d3f4a3b01af1d47
   rspec-support (3.13.7) sha256=0640e5570872aafefd79867901deeeeb40b0c9875a36b983d85f54fb7381c47c
   standardwebhooks (1.1.0) sha256=356ba711c14def4fb27310e4163b26bd5cccf325212c3440cabadd825e4be11f
+  tiktoken_ruby (0.0.16-arm64-darwin) sha256=3da6fe850bf920d08c7eb736673f50bc9d08e8f2e17d34904ad3185a73fc9da7
   tty-color (0.6.0) sha256=6f9c37ca3a4e2367fb2e6d09722762647d6f455c111f05b59f35730eeb24332a
   tty-cursor (0.7.1) sha256=79534185e6a777888d88628b14b6a1fdf5154a603f285f80b1753e1908e0bf48
   tty-prompt (0.23.1) sha256=fcdbce905238993f27eecfdf67597a636bc839d92192f6a0eef22b8166449ec8

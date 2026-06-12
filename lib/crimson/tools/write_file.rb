@@ -12,6 +12,8 @@ module Crimson
         content: { type: "string", description: "The content to write" }
       }.freeze
 
+      MUTATION_QUEUE = FileMutationQueue.new
+
       def self.definition
         Schema.build(name: TOOL_NAME, description: "Write content to a file. Creates the file and parent directories if needed.", parameters: PARAMS, required: %w[path content])
       end
@@ -24,15 +26,17 @@ module Crimson
         return "Error: No path provided" if path.nil? || path.strip.empty?
 
         expanded = File.expand_path(path)
-        dir = File.dirname(expanded)
 
-        old_content = File.exist?(expanded) ? File.read(expanded) : nil
+        MUTATION_QUEUE.with_file(expanded) do
+          dir = File.dirname(expanded)
+          old_content = File.exist?(expanded) ? File.read(expanded) : nil
 
-        FileUtils.mkdir_p(dir) unless Dir.exist?(dir)
-        File.write(expanded, content)
+          FileUtils.mkdir_p(dir) unless Dir.exist?(dir)
+          File.write(expanded, content)
 
-        diff = DiffUtil.format_diff(old_content || "", content, path)
-        "Successfully wrote to #{path}\n#{diff}"
+          diff = DiffUtil.format_diff(old_content || "", content, path)
+          "Successfully wrote to #{path}\n#{diff}"
+        end
       rescue => e
         "Error writing file: #{e.message}"
       end

@@ -17,7 +17,7 @@ module Crimson
       @anthropic_defs = nil
     end
 
-    def execute(tool_name, arguments)
+    def execute(tool_name, arguments, abort_signal: nil)
       tool = @tools[tool_name]
       return "Error: Unknown tool '#{tool_name}'" unless tool
 
@@ -36,7 +36,15 @@ module Crimson
         end
       end
 
-      tool.call(**args)
+      result = if tool.respond_to?(:call_with_signal) && abort_signal
+                 tool.call_with_signal(**args, signal: abort_signal)
+               else
+                 tool.call(**args)
+               end
+
+      result = apply_truncation(tool_name, result)
+
+      result
     rescue JSON::ParserError
       "Error: Invalid JSON arguments for #{tool_name}"
     rescue ArgumentError => e
@@ -67,6 +75,19 @@ module Crimson
       Dir.glob(File.join(skills_dir, "*.md")).sort.filter_map do |file|
         File.read(file).strip
       end.join("\n\n")
+    end
+
+    private
+
+    def apply_truncation(tool_name, result)
+      return result unless result.is_a?(String)
+      return result if result.start_with?("Error")
+      return result if result.bytesize <= Tools::Truncator::DEFAULT_MAX_BYTES
+
+      truncation = Tools::Truncator.truncate(result)
+      output = truncation.text
+      output += "\n\n(full output saved to #{truncation.full_output_path})" if truncation.full_output_path
+      output
     end
   end
 end

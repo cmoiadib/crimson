@@ -25,6 +25,8 @@ module Crimson
         }
       }.freeze
 
+      MUTATION_QUEUE = FileMutationQueue.new
+
       def self.prepare_arguments(args)
         if args["edits"].is_a?(Array)
           args["edits"].each { |e| e["replace_all"] = !!e["replace_all"] if e.key?("replace_all") }
@@ -45,47 +47,50 @@ module Crimson
         return "Error: No path provided" if path.nil? || path.strip.empty?
 
         expanded = File.expand_path(path)
-        return "Error: File not found: #{path}" unless File.exist?(expanded)
-        return "Error: Not a file: #{path}" unless File.file?(expanded)
 
-        content = File.binread(expanded)
-        has_bom = content.start_with?("\xEF\xBB\xBF")
-        content = content.byteslice(3..) if has_bom
-        content = content.force_encoding("UTF-8")
+        MUTATION_QUEUE.with_file(expanded) do
+          return "Error: File not found: #{path}" unless File.exist?(expanded)
+          return "Error: Not a file: #{path}" unless File.file?(expanded)
 
-        line_ending = detect_line_ending(content)
-        content = content.gsub("\r\n", "\n") if line_ending == :crlf
+          content = File.binread(expanded)
+          has_bom = content.start_with?("\xEF\xBB\xBF")
+          content = content.byteslice(3..) if has_bom
+          content = content.force_encoding("UTF-8")
 
-        old_content = content.dup
+          line_ending = detect_line_ending(content)
+          content = content.gsub("\r\n", "\n") if line_ending == :crlf
 
-        if edits.is_a?(Array) && !edits.empty?
-          results = edits.map { |e| apply_edit(content, e["old_string"], e["new_string"], e["replace_all"]) }
-          error = results.find { |r| r[:error] }
-          return error[:error] if error
+          old_content = content.dup
 
-          results.each { |r| content = r[:content] }
-          count = results.sum { |r| r[:count] }
-        elsif old_string
-          return "Error: No old_string provided" if old_string.nil? || old_string.empty?
+          if edits.is_a?(Array) && !edits.empty?
+            results = edits.map { |e| apply_edit(content, e["old_string"], e["new_string"], e["replace_all"]) }
+            error = results.find { |r| r[:error] }
+            return error[:error] if error
 
-          result = apply_edit(content, old_string, new_string, replace_all)
-          return result[:error] if result[:error]
+            results.each { |r| content = r[:content] }
+            count = results.sum { |r| r[:count] }
+          elsif old_string
+            return "Error: No old_string provided" if old_string.nil? || old_string.empty?
 
-          content = result[:content]
-          count = result[:count]
-        else
-          return "Error: Provide either old_string/new_string or edits array"
+            result = apply_edit(content, old_string, new_string, replace_all)
+            return result[:error] if result[:error]
+
+            content = result[:content]
+            count = result[:count]
+          else
+            return "Error: Provide either old_string/new_string or edits array"
+          end
+
+          content = content.gsub("\n", "\r\n") if line_ending == :crlf
+          content = "\xEF\xBB\xBF#{content}" if has_bom
+
+          File.binwrite(expanded, content)
+
+          clean_old = old_content
+          clean_new = has_bom ? content.byteslice(3..) : content
+          diff = DiffUtil.format_diff(clean_old, clean_new, path)
+          "Successfully edited #{path} (#{count} replacement#{'s' if count != 1})\n#{diff}"
         end
-
-        content = content.gsub("\n", "\r\n") if line_ending == :crlf
-        content = "\xEF\xBB\xBF#{content}" if has_bom
-
-        File.binwrite(expanded, content)
-
-        clean_old = old_content
-        clean_new = has_bom ? content.byteslice(3..) : content
-        diff = DiffUtil.format_diff(clean_old, clean_new, path)
-        "Successfully edited #{path} (#{count} replacement#{'s' if count != 1})\n#{diff}"
       rescue => e
         "Error editing file: #{e.message}"
       end

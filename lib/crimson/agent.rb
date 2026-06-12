@@ -4,6 +4,25 @@ require "json"
 require "securerandom"
 
 module Crimson
+  class AbortSignal
+    def initialize
+      @aborted = false
+      @mutex = Mutex.new
+    end
+
+    def abort!
+      @mutex.synchronize { @aborted = true }
+    end
+
+    def aborted?
+      @mutex.synchronize { @aborted }
+    end
+
+    def reset
+      @mutex.synchronize { @aborted = false }
+    end
+  end
+
   class Agent
     MAX_ITERATIONS = 50
     HISTORY_FILE = ".crimson_history"
@@ -36,6 +55,7 @@ module Crimson
       @before_tool_call = nil
       @after_tool_call = nil
       @abort_controller = false
+      @abort_signal = AbortSignal.new
       @session_manager = nil
       @session_id = nil
       @session_cwd = nil
@@ -75,8 +95,13 @@ module Crimson
       @last_entry_id = entries.last&.id
     end
 
-    def enable_compaction!(client:, max_context_tokens: 100_000)
-      @compactor = Compactor.new(client: client, max_context_tokens: max_context_tokens)
+    def enable_compaction!(client:, max_context_tokens: 100_000, model: nil, provider: nil)
+      @compactor = Compactor.new(
+        client: client,
+        max_context_tokens: max_context_tokens,
+        model: model || Crimson.config&.model,
+        provider: provider || Crimson.config&.provider
+      )
     end
 
     def compact!
@@ -108,6 +133,7 @@ module Crimson
     end
 
     def abort!
+      @abort_signal.abort!
       @abort_controller = true
     end
 
@@ -154,6 +180,7 @@ module Crimson
 
     def run_loop
       @abort_controller = false
+      @abort_signal.reset
       @events.emit(Agent::Events::AGENT_START)
 
       iterations = 0
@@ -223,7 +250,8 @@ module Crimson
       executor = Agent::ToolExecutor.new(
         @tool_registry, @events,
         before_hook: @before_tool_call,
-        after_hook: @after_tool_call
+        after_hook: @after_tool_call,
+        abort_signal: @abort_signal
       )
 
       results = executor.execute(assistant_message.tool_calls, @history)
