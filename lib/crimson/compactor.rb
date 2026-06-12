@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Crimson
   class Compactor
     APPROX_CHARS_PER_TOKEN = 4
