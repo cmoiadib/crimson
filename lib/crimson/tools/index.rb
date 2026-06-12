@@ -2,6 +2,8 @@
 
 require_relative "schema"
 require_relative "diff_util"
+require_relative "truncator"
+require_relative "file_mutation_queue"
 require_relative "read_file"
 require_relative "write_file"
 require_relative "edit_file"

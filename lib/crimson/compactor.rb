@@ -2,13 +2,13 @@
 
 module Crimson
   class Compactor
-    APPROX_CHARS_PER_TOKEN = 4
     DEFAULT_MAX_CONTEXT_TOKENS = 100_000
     KEEP_RECENT_MESSAGES = 4
 
-    def initialize(client:, max_context_tokens: DEFAULT_MAX_CONTEXT_TOKENS)
+    def initialize(client:, max_context_tokens: DEFAULT_MAX_CONTEXT_TOKENS, model: nil, provider: nil)
       @client = client
       @max_context_tokens = max_context_tokens
+      @token_counter = TokenCounter.new(model: model, provider: provider)
     end
 
     def needs_compaction?(history)
@@ -64,8 +64,7 @@ module Crimson
     end
 
     def estimated_tokens(history)
-      total_chars = history.sum { |msg| msg.content.to_s.length }
-      total_chars / APPROX_CHARS_PER_TOKEN
+      @token_counter.count_messages(history)
     end
 
     def truncate(text, max)

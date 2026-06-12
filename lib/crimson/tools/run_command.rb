@@ -36,6 +36,10 @@ module Crimson
       end
 
       def self.call(command:, timeout: 30)
+        call_with_signal(command: command, timeout: timeout, signal: nil)
+      end
+
+      def self.call_with_signal(command:, timeout: 30, signal: nil)
         return "Error: No command provided" if command.nil? || command.strip.empty?
 
         stdout = String.new
@@ -47,6 +51,18 @@ module Crimson
           Timeout.timeout(timeout) do
             Open3.popen3(command) do |stdin, out, err, wait_thr|
               stdin.close
+
+              abort_thread = if signal
+                Thread.new do
+                  sleep 0.1 until signal.aborted? || !wait_thr.status
+                  if signal.aborted? && wait_thr.pid
+                    begin
+                      Process.kill("TERM", wait_thr.pid)
+                    rescue Errno::ESRCH, Errno::EPERM
+                    end
+                  end
+                end
+              end
 
               readers = [out, err]
               while readers.any?
@@ -71,20 +87,33 @@ module Crimson
               end
 
               status = wait_thr.value
+              abort_thread&.kill
             end
           end
 
           output = String.new
           output << stdout if !stdout.empty?
           output << stderr if !stderr.empty?
-          output = "(no output)" if output.strip.empty?
-          output << "\n(exit code: #{status.exitstatus})" unless status.success?
+
+          output = strip_ansi_codes(output)
+          output = String.new("(no output)") if output.strip.empty?
+          if status.success?
+            # No exit code line needed for success
+          elsif status.exitstatus
+            output << "\n(exit code: #{status.exitstatus})"
+          else
+            output << "\n(process killed)"
+          end
           output
         rescue Timeout::Error
           "Error: Command timed out after #{timeout} seconds"
         rescue => e
           "Error executing command: #{e.message}"
         end
+      end
+
+      def self.strip_ansi_codes(text)
+        text.gsub(/\e\[[0-9;]*[a-zA-Z]/, '')
       end
     end
   end

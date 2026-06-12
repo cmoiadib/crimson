@@ -5,11 +5,12 @@ require "thread"
 module Crimson
   class Agent
     class ToolExecutor
-      def initialize(tool_registry, events, before_hook: nil, after_hook: nil)
+      def initialize(tool_registry, events, before_hook: nil, after_hook: nil, abort_signal: nil)
         @tool_registry = tool_registry
         @events = events
         @before_hook = before_hook
         @after_hook = after_hook
+        @abort_signal = abort_signal
       end
 
       def execute(tool_calls, history)
@@ -70,7 +71,7 @@ module Crimson
           end
         end
 
-        result = @tool_registry.execute(tc.name, tc.arguments)
+        result = @tool_registry.execute(tc.name, tc.arguments, abort_signal: @abort_signal)
         is_error = result.is_a?(String) && result.start_with?("Error")
 
         if @after_hook
