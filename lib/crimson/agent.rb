@@ -44,11 +44,13 @@ module Crimson
     attr_accessor :config
     attr_writer :define_system_prompt
 
-    def initialize(client:, tool_registry:, system_prompt:)
+    def initialize(client:, tool_registry:, system_prompt:, skill_router: nil)
       @client = client
       @tool_registry = tool_registry
       @system_prompt = system_prompt
       @system_prompt_builder = nil
+      @skill_router = skill_router || SkillRouter.new
+      @active_skills = ["coding"]
       @config = Crimson.config
       @history = []
       @events = Agent::EventEmitter.new
@@ -211,8 +213,16 @@ module Crimson
 
         maybe_compact
 
+        last_user_msg = @history.last&.content.to_s
+        tools_invoked = last_invoked_tool_names
+        new_skills = @skill_router.resolve(last_user_msg, tools_invoked: tools_invoked)
+        if new_skills != @active_skills
+          @active_skills = new_skills
+          @cached_system_msg = nil
+        end
+
         messages = build_messages
-        tools = tools_for_message(@history.last&.content.to_s)
+        tools = tools_for_message(last_user_msg)
 
         assistant_message, usage = RetryHandler.with_retry do
           @client.chat(messages: messages, tools: tools) do |text_chunk, _tool_event|
@@ -305,10 +315,32 @@ module Crimson
 
     def build_messages
       msgs = []
-      prompt = resolved_system_prompt
-      msgs << (@cached_system_msg ||= Message::System.new(prompt)) unless prompt.empty?
+      prompt = assemble_system_prompt
+      msgs << Message::System.new(prompt) unless prompt.empty?
       msgs.concat(@history)
       msgs
+    end
+
+    def assemble_system_prompt
+      parts = []
+      base = resolved_system_prompt
+      parts << base unless base.empty?
+
+      @active_skills.each do |skill_name|
+        next if skill_name == "coding" && !base.empty?
+        content = @skill_router.load_skill(skill_name)
+        parts << content if content && !content.empty?
+      end
+
+      parts.join("\n\n")
+    end
+
+    def last_invoked_tool_names
+      @history.reverse_each do |msg|
+        next unless msg.is_a?(Message::Assistant) && msg.tool_calls&.any?
+        return msg.tool_calls.map(&:name)
+      end
+      []
     end
 
     def provider_tool_definitions
