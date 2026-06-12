@@ -1,90 +1,129 @@
 # frozen_string_literal: true
 
 require "pastel"
-require_relative "tui"
 
 module Crimson
   class OutputHandler
+    RENDER_INTERVAL = 0.05
+
     def initialize
       @pastel = Pastel.new
-      @tui = nil
+      @spinner_active = false
       @first_token = false
+      @render_buffer = String.new
+      @render_thread = nil
+      @render_mutex = Mutex.new
+      @spinner_thread = nil
     end
 
-    def attach(agent, tui)
-      @tui = tui
-
+    def attach(agent)
       agent.on(Agent::Events::AGENT_START) do
         @first_token = false
-        @tui.show_loading("Thinking...")
-        update_status(agent, status: :thinking)
+        start_spinner
       end
 
       agent.on(Agent::Events::MESSAGE_UPDATE) do |_event, delta:, **|
-        unless @first_token
-          @tui.hide_loading
-          @first_token = true
-        end
-        @tui.insert_content(delta)
-        update_status(agent, status: :streaming)
+        stop_spinner unless @first_token
+        @first_token = true
+        @render_mutex.synchronize { @render_buffer << delta }
+        start_render_thread unless @render_thread&.alive?
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_START) do |_event, tool_name:, args:, **|
-        @tui.hide_loading
+        stop_spinner
         path = extract_path(args)
-        line = path ? "  #{tool_name}(#{path})" : "  #{tool_name}"
-        @tui.insert_content(line)
-        update_status(agent, status: :tool_running)
+        if path
+          puts @pastel.bold.cyan("  #{tool_name}(#{path})")
+        else
+          puts @pastel.bold.cyan("  #{tool_name}")
+        end
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_END) do |_event, result:, is_error:, **|
         truncated = truncate(result.to_s, 200)
-        prefix = is_error ? "  -> " : "  -> "
-        @tui.insert_content("#{prefix}#{truncated}")
+        if is_error
+          puts @pastel.red("  -> #{truncated}")
+        else
+          puts @pastel.dim("  -> #{truncated}")
+        end
       end
 
       agent.on(Agent::Events::TOOL_EXECUTION_UPDATE) do |_event, tool_name:, partial_result:, **|
         next unless tool_name == "run_command"
-        @tui.insert_content(partial_result.to_s[0..120])
+        flush_render_buffer
+        $stdout.write("\r #{@pastel.dim(partial_result)}")
+        $stdout.flush
       end
 
       agent.on(Agent::Events::TURN_START) do
-        @tui.show_loading("Thinking...") unless @first_token
+        start_spinner unless @first_token
       end
 
       agent.on(Agent::Events::AGENT_END) do
-        @tui.hide_loading
+        stop_spinner
+        flush_render_buffer
         usage = agent.token_usage
         if usage[:total] > 0
           cost = agent.cost_tracker.total_cost
           cost_str = cost > 0 ? " ($#{format("%.4f", cost)})" : ""
-          model = agent.config.model rescue ""
-          model_str = model.empty? ? "" : " #{model}"
-          @tui.insert_content("\n  tokens: #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}#{cost_str}#{model_str}")
+          puts @pastel.dim("\n  tokens: #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}#{cost_str}")
         end
-        update_status(agent, status: :idle)
       end
     end
 
     private
 
-    def update_status(agent, status:)
-      token_usage = agent.token_usage rescue { prompt: 0, completion: 0, total: 0 }
-      cost = agent.cost_tracker.total_cost rescue 0.0
-      model = agent.config.model rescue ""
+    def start_spinner
+      return if @spinner_active
+      @spinner_active = true
+      @spinner_thread = Thread.new do
+        frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        i = 0
+        while @spinner_active
+          $stdout.write("\r  \e[36m#{frames[i % frames.length]}\e[0m Thinking...")
+          $stdout.flush
+          i += 1
+          sleep 0.08
+        end
+        $stdout.write("\r\e[2K")
+        $stdout.flush
+      end
+    end
 
-      @tui.update_status(
-        model: model,
-        tokens: token_usage,
-        cost: cost,
-        status: status
-      )
+    def stop_spinner
+      return unless @spinner_active
+      @spinner_active = false
+      @spinner_thread&.join(2)
+      @spinner_thread = nil
+      $stdout.write("\r\e[2K")
+      $stdout.flush
+    end
+
+    def start_render_thread
+      @render_thread = Thread.new do
+        loop do
+          sleep RENDER_INTERVAL
+          break if flush_render_buffer == :empty
+        end
+      end
+    end
+
+    def flush_render_buffer
+      data = nil
+      @render_mutex.synchronize do
+        data = @render_buffer.dup
+        @render_buffer.clear
+      end
+      return :empty if data.nil? || data.empty?
+      $stdout.write(data)
+      $stdout.flush
+      nil
     end
 
     def extract_path(args)
       return nil unless args.is_a?(Hash)
       args["path"] || args[:path]
-    rescue
+    rescue => e
       nil
     end
 

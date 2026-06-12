@@ -32,7 +32,6 @@ Gem::Specification.new do |spec|
   spec.add_dependency "pastel", "~> 0.8"
   spec.add_dependency "reline", "~> 0.6"
   spec.add_dependency "tiktoken_ruby", "~> 0.0.5"
-  spec.add_dependency "ratatui_ruby", "~> 1.5"
 
   spec.add_development_dependency "rspec", "~> 3.13"
   spec.add_development_dependency "pry", "~> 0.16"

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "reline"
 require "pastel"
 
 module Crimson
@@ -7,103 +8,85 @@ module Crimson
     def initialize(agent)
       @agent = agent
       @pastel = Pastel.new
-      @tui = Tui.new
       @output_handler = OutputHandler.new
-      @output_handler.attach(agent, @tui)
-      @agent_thread = nil
-      @agent_running = false
+      @output_handler.attach(agent)
+      setup_readline
     end
 
     def start
-      @tui.run do
-        @tui.insert_content("**Crimson v#{VERSION}** — Type `/help` for commands, Ctrl+C to cancel")
+      puts @pastel.bold("Crimson v#{VERSION}")
+      puts @pastel.dim("Type /help for commands, /exit to quit")
+      puts
 
-        loop do
-          result = input_loop
-          break if result == :quit
+      loop do
+        input = Reline.readline("> ", true)
 
-          if result[:command]
-            break if handle_command(result[:command]) == :quit
-          elsif result[:input]
-            run_agent(result[:input])
-          end
+        break if input.nil?
+        input = input.strip
+        break if input == "/exit" || input == "/quit"
+        next if input.empty?
+
+        if input.start_with?("/")
+          handle_command(input)
+        else
+          @agent.prompt(input)
         end
+      rescue => e
+        puts @pastel.red("Error: #{e.message}")
       end
+
+      puts @pastel.dim("Goodbye!")
     end
 
     private
 
-    def input_loop
-      loop do
-        event = @tui.poll_event(timeout: 0.05)
-
-        if event && event.respond_to?(:code)
-          result = @tui.handle_key(event)
-          return result if result
-        end
-
-        @tui.draw_frame
-      end
-    end
-
-    def run_agent(input)
-      @agent_running = true
-      @tui.insert_content("  \e[1m#{input}\e[0m")
-
-      @agent_thread = Thread.new do
-        begin
-          @agent.prompt(input)
-        rescue Interrupt
-          @tui.insert_content("\n  cancelled.")
-        rescue => e
-          @tui.insert_content("\n  error: #{e.message}")
-        ensure
-          @agent_running = false
-        end
-      end
-
-      while @agent_running
-        event = @tui.poll_event(timeout: 0.05)
-        if event && event.respond_to?(:code) && event.ctrl? && event.code == "c"
-          @agent_thread.kill
-          @tui.insert_content("\n  cancelled.")
-          @agent_running = false
-          @tui.hide_loading
-          @tui.update_status(status: :idle)
-        end
-        @tui.draw_frame
-      end
-
-      @agent_thread.join
-      @agent_thread = nil
-      @tui.draw_frame
-    end
-
     def handle_command(input)
       case input
       when "/help"
-        show_help
-      when "/exit", "/quit"
-        :quit
+        puts @pastel.bold("Commands:")
+        puts "  /help       Show help message"
+        puts "  /clear      Clear conversation history"
+        puts "  /model      Switch model (interactive selector)"
+        puts "  /thinking   Set thinking level (off/low/medium/high)"
+        puts "  /tools      List available tools"
+        puts "  /save       Save conversation to file"
+        puts "  /load       Load conversation from file"
+        puts "  /usage      Show token usage and cost"
+        puts "  /sessions   List sessions for current directory"
+        puts "  /name       Set session name"
+        puts "  /session    Show session info"
+        puts "  /fork       Fork current session into new branch"
+        puts "  /tree       Show conversation tree"
+        puts "  /compact    Compact conversation history"
+        puts "  /exit       Exit crimson"
       when "/clear"
         @agent.reset
-        @tui.insert_content("  conversation cleared.")
+        puts @pastel.dim("Conversation cleared.")
       when "/model"
         handle_model_switch
       when "/thinking"
         handle_thinking
       when "/tools"
-        @agent.tool_registry.tool_names.each { |n| @tui.insert_content("  - #{n}") }
+        puts @pastel.bold("Available tools:")
+        @agent.tool_registry.tool_names.each do |name|
+          puts "  - #{name}"
+        end
       when "/save"
-        @tui.insert_content("  #{@agent.save_history}")
+        puts @agent.save_history
       when "/load"
-        @tui.insert_content("  #{@agent.load_history}")
+        puts @agent.load_history
       when "/usage"
-        show_usage
+        usage = @agent.token_usage
+        cost = @agent.cost_tracker.total_cost
+        puts @pastel.bold("Token usage:")
+        puts "  Prompt:     #{usage[:prompt]}"
+        puts "  Completion: #{usage[:completion]}"
+        puts "  Total:      #{usage[:total]}"
+        puts "  Cost:       $#{format('%.4f', cost)}" if cost > 0
       when "/sessions"
         handle_sessions
       when "/name"
-        @tui.insert_content("  usage: /name <session name>")
+        handle_name
       when "/session"
         handle_session_info
       when "/fork"
@@ -111,80 +94,58 @@ module Crimson
       when "/tree"
         handle_tree
       when "/compact"
-        handle_compact
+        if @agent.compactor
+          result = @agent.compact!
+          puts @pastel.dim(result)
+        else
+          puts @pastel.yellow("Compaction not enabled.")
+        end
       else
         if input.start_with?("/name ")
           handle_name_set(input[6..].strip)
         else
-          @tui.insert_content("  unknown command: #{input}. type /help")
+          puts @pastel.yellow("Unknown command: #{input}. Type /help for commands.")
         end
       end
-      nil
-    end
-
-    def show_help
-      lines = [
-        "  commands:",
-        "  /help       show this message",
-        "  /clear      clear conversation",
-        "  /model      switch model",
-        "  /thinking   set thinking level",
-        "  /tools      list tools",
-        "  /save       save conversation",
-        "  /load       load conversation",
-        "  /usage      token usage",
-        "  /sessions   list sessions",
-        "  /name       set session name",
-        "  /session    session info",
-        "  /fork       fork session",
-        "  /tree       conversation tree",
-        "  /compact    compact history",
-        "  /exit       exit"
-      ]
-      lines.each { |l| @tui.insert_content(l) }
-    end
-
-    def show_usage
-      usage = @agent.token_usage
-      cost = @agent.cost_tracker.total_cost
-      @tui.insert_content("  tokens: #{usage[:prompt]}↑ #{usage[:completion]}↓ = #{usage[:total]}")
-      @tui.insert_content("  cost: $#{format('%.4f', cost)}") if cost > 0
     end
 
     def handle_sessions
-      return @tui.insert_content("  no active session.") unless @agent.session_id
+      return puts(@pastel.dim("No active session.")) unless @agent.session_id
 
       manager = SessionManager.new
       sessions = manager.list(cwd: Dir.pwd)
       if sessions.empty?
-        @tui.insert_content("  no sessions found.")
+        puts @pastel.dim("No sessions found.")
       else
+        puts @pastel.bold("Sessions:")
         sessions.each do |s|
           current = s.id == @agent.session_id ? " (current)" : ""
           name_str = s.name ? "[#{s.name}] " : ""
           preview = s.preview || "(no preview)"
-          @tui.insert_content("  #{s.id[0..7]} #{name_str}#{preview} #{s.last_timestamp}#{current}")
+          puts "  #{@pastel.cyan(s.id[0..7])} #{name_str}#{preview} #{s.last_timestamp}#{current}"
         end
       end
     end
 
     def handle_model_switch
       config = @agent.config || Crimson.config
-      @tui.insert_content("  current: #{PROVIDERS[config.provider.to_sym][:name]} / #{config.model}")
+      puts @pastel.dim("Current: #{PROVIDERS[config.provider.to_sym][:name]} / #{config.model}")
+      puts
 
       begin
         prompt = TTY::Prompt.new
         models = fetch_available_models(config)
         if models.empty?
-          @tui.insert_content("  could not fetch model list.")
+          puts @pastel.yellow("Could not fetch model list. Showing current model only.")
           return
         end
-        selected = prompt.select("select model:", models.map { |m| { name: m, value: m } })
+
+        selected = prompt.select("Select model:", models.map { |m| { name: m, value: m } })
         @agent.switch_model(selected)
         @agent.config.save
-        @tui.insert_content("  switched to: #{selected}")
+        puts @pastel.dim("Switched to: #{selected}")
       rescue => e
-        @tui.insert_content("  error: #{e.message}")
+        puts @pastel.red("Error switching model: #{e.message}")
       end
     end
 
@@ -194,13 +155,16 @@ module Crimson
       provider = PROVIDERS[config.provider.to_sym]
       base_url = config.base_url || provider[:base_url]
       url = URI("#{base_url}/models")
+
       headers = provider[:auth_headers].call(config.api_key)
       http = Net::HTTP.new(url.host, url.port)
       http.use_ssl = url.scheme == "https"
       http.open_timeout = 5
       http.read_timeout = 10
+
       request = Net::HTTP::Get.new(url.request_uri, headers)
       response = http.request(request)
+
       return [] unless response.is_a?(Net::HTTPSuccess)
       data = JSON.parse(response.body)
       (data["data"] || []).map { |m| m["id"] }.sort
@@ -211,81 +175,83 @@ module Crimson
     def handle_thinking
       config = @agent.config || Crimson.config
       current = config.thinking_level || "off"
-      @tui.insert_content("  current thinking level: #{current}")
+      puts @pastel.dim("Current thinking level: #{current}")
+      puts
 
       begin
         prompt = TTY::Prompt.new
-        level = prompt.select("thinking level:", %w[off low medium high].map { |l| { name: l, value: l } })
+        level = prompt.select("Thinking level:", %w[off low medium high].map { |l| { name: l, value: l } })
         config.thinking_level = level
         config.save
         @agent.config = config
-        @tui.insert_content("  thinking level set to: #{level}")
+        puts @pastel.dim("Thinking level set to: #{level}")
       rescue => e
-        @tui.insert_content("  error: #{e.message}")
+        puts @pastel.red("Error setting thinking level: #{e.message}")
       end
     end
 
+    def handle_name
+      return puts(@pastel.yellow("No active session.")) unless @agent.session_id
+      puts @pastel.dim("Usage: /name <session name>")
+    end
+
+    def handle_name_set(name)
+      return puts(@pastel.yellow("No active session.")) unless @agent.session_id
+      return puts(@pastel.yellow("Usage: /name <session name>")) if name.empty?
+
+      manager = SessionManager.new
+      manager.set_name(@agent.session_id, cwd: Dir.pwd, name: name)
+      puts @pastel.dim("Session name set to: #{name}")
+    end
+
     def handle_session_info
-      return @tui.insert_content("  no active session.") unless @agent.session_id
+      return puts(@pastel.dim("No active session.")) unless @agent.session_id
 
       manager = SessionManager.new
       header = manager.load_header(@agent.session_id, cwd: Dir.pwd)
       entries = manager.load(@agent.session_id, cwd: Dir.pwd)
+
+      puts @pastel.bold("Session info:")
+      puts "  ID:       #{@agent.session_id}"
+      puts "  Name:     #{header&.dig('name') || '(unnamed)'}" if header
+      puts "  Created:  #{header&.dig('timestamp')}" if header
+      puts "  CWD:      #{@agent.session_cwd}"
+      puts "  Entries:  #{entries.length}"
+
       usage = @agent.token_usage
+      puts "  Tokens:   #{usage[:total]} (#{usage[:prompt]} prompt + #{usage[:completion]} completion)"
       cost = @agent.cost_tracker.total_cost
-
-      @tui.insert_content("  id: #{@agent.session_id}")
-      @tui.insert_content("  name: #{header&.dig('name') || '(unnamed)'}")
-      @tui.insert_content("  entries: #{entries.length}")
-      @tui.insert_content("  tokens: #{usage[:total]}")
-      @tui.insert_content("  cost: $#{format('%.4f', cost)}") if cost > 0
-    rescue => e
-      @tui.insert_content("  error: #{e.message}")
-    end
-
-    def handle_name_set(name)
-      return @tui.insert_content("  no active session.") unless @agent.session_id
-      return @tui.insert_content("  usage: /name <session name>") if name.empty?
-
-      manager = SessionManager.new
-      manager.set_name(@agent.session_id, cwd: Dir.pwd, name: name)
-      @tui.insert_content("  session name set to: #{name}")
+      puts "  Cost:     $#{format('%.4f', cost)}" if cost > 0
     end
 
     def handle_fork
-      return @tui.insert_content("  no active session.") unless @agent.session_id
+      return puts(@pastel.yellow("No active session to fork.")) unless @agent.session_id
 
       manager = SessionManager.new
       last_id = @agent.instance_variable_get(:@last_entry_id)
       new_id = manager.fork(@agent.session_id, cwd: Dir.pwd, from_entry_id: last_id)
       @agent.resume_session(new_id, cwd: Dir.pwd, session_manager: manager)
-      @tui.insert_content("  forked to session: #{new_id[0..7]}")
+      puts @pastel.dim("Forked to new session: #{new_id[0..7]}")
     end
 
     def handle_tree
-      return @tui.insert_content("  no active session.") unless @agent.session_id
+      return puts(@pastel.dim("No active session.")) unless @agent.session_id
 
       manager = SessionManager.new
       entries = manager.load(@agent.session_id, cwd: Dir.pwd)
       entries.each do |e|
         case e.role
         when "user"
-          @tui.insert_content("  * #{truncate(e.content.to_s, 60)}")
+          preview = truncate(e.content.to_s, 60)
+          puts "  #{@pastel.cyan("⏺")} #{preview}"
         when "assistant"
           tool_str = e.tool_calls.any? ? " [#{e.tool_calls.map { |t| t["name"] }.join(", ")}]" : ""
-          @tui.insert_content("    #{truncate(e.content.to_s, 60)}#{tool_str}")
+          preview = truncate(e.content.to_s, 60)
+          puts "  #{@pastel.dim("↳ #{preview}#{tool_str}")}"
         when "tool_result"
-          @tui.insert_content("      -> #{e.tool_name}: #{truncate(e.content.to_s, 40)}")
+          preview = truncate(e.content.to_s, 40)
+          puts "  #{@pastel.dim("  → #{e.tool_name}: #{preview}")}"
         end
-      end
-    end
-
-    def handle_compact
-      if @agent.compactor
-        result = @agent.compact!
-        @tui.insert_content("  #{result}")
-      else
-        @tui.insert_content("  compaction not enabled.")
       end
     end
 
@@ -293,6 +259,35 @@ module Crimson
       return "" if text.nil?
       cleaned = text.gsub("\n", "\\n")
       cleaned.length > max_len ? "#{cleaned[0...max_len]}..." : cleaned
+    end
+
+    def setup_readline
+      Reline.completion_proc = method(:file_path_completion)
+    end
+
+    def file_path_completion(input)
+      prefix = input.strip
+      return [] unless prefix.start_with?("@", "./", "~/", "/")
+
+      path_prefix = prefix.start_with?("@") ? prefix[1..] : prefix
+      expanded = File.expand_path(path_prefix)
+
+      if File.directory?(expanded)
+        Dir.entries(expanded)
+          .reject { |e| e.start_with?(".") }
+          .map { |e| prefix.end_with?("/") ? "#{prefix}#{e}" : "#{prefix}/#{e}" }
+      else
+        dir = File.dirname(expanded)
+        base = File.basename(expanded)
+        return [] unless Dir.exist?(dir)
+
+        Dir.entries(dir)
+          .reject { |e| e.start_with?(".") }
+          .select { |e| e.downcase.start_with?(base.downcase) }
+          .map { |e| prefix.include?("/") ? "#{File.dirname(prefix)}/#{e}" : e }
+      end
+    rescue => e
+      []
     end
   end
 end
