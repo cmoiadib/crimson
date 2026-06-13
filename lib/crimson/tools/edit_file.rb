@@ -63,12 +63,13 @@ module Crimson
           old_content = content.dup
 
           if edits.is_a?(Array) && !edits.empty?
-            results = edits.map { |e| apply_edit(content, e["old_string"], e["new_string"], e["replace_all"]) }
-            error = results.find { |r| r[:error] }
-            return error[:error] if error
-
-            results.each { |r| content = r[:content] }
-            count = results.sum { |r| r[:count] }
+            count = 0
+            edits.each do |e|
+              result = apply_edit(content, e["old_string"], e["new_string"], e["replace_all"])
+              return result[:error] if result[:error]
+              content = result[:content]
+              count += result[:count]
+            end
           elsif old_string
             return "Error: No old_string provided" if old_string.nil? || old_string.empty?
 

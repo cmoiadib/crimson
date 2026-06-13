@@ -48,7 +48,7 @@ module Crimson
         private
 
         def search_with_rg(pattern, path, file_pattern, context)
-          cmd = ["rg", "--no-heading", "--line-number", "--color=never", "-E"]
+          cmd = ["rg", "--no-heading", "--line-number", "--color=never"]
           cmd << "-C" << context.to_s if context > 0
           cmd += ["--glob", "!{.git,node_modules,vendor,.bundle,tmp,log}"]
           cmd += ["--glob", file_pattern] if file_pattern

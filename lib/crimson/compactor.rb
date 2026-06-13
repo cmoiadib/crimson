@@ -26,7 +26,7 @@ module Crimson
 
       compacted = []
       compacted << Message::User.new("[Previous conversation summary]\n#{summary}")
-      compacted << Message::Assistant.new("Understood. I have the context from the previous conversation.")
+      compacted << Message::Assistant.new(content: "Understood. I have the context from the previous conversation.")
       compacted.concat(recent)
       compacted
     end
